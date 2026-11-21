@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FrameScribe 笔记本</title>
+<link rel="stylesheet" href="manager.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span>FrameScribe <small>插件笔记本</small></div>
+  <div class="sp"></div>
+  <div class="hoststat" id="hostStat">桥接：检测中…</div>
+  <div class="engine-chip" id="engineChip"></div>
+  <button id="openSettings" class="ghost">⚙ 设置</button>
+</header>
+<div class="layout">
+  <aside id="sessions"></aside>
+  <main id="detail">
+    <div class="empty">
+      <h2>还没有记录</h2>
+      <p>打开任意 B 站视频，按 <kbd id="k1">Alt+S</kbd> 截图记时间点，按 <kbd id="k2">Alt+A</kbd> 截图并写一句。</p>
+      <p>快捷键可在 <code>chrome://extensions/shortcuts</code> 改。</p>
+    </div>
+  </main>
+</div>
+
+<dialog id="settings">
+  <form method="dialog" class="sheet">
+    <div class="sh-head"><h2>设置</h2><span class="sp"></span><button value="cancel" class="ghost">关闭</button></div>
+
+    <section>
+      <h3>本地桥接程序</h3>
+      <div id="hostDetail" class="hostdetail">检测中…</div>
+    </section>
+
+    <section>
+      <h3>导出位置</h3>
+      <input id="exportRoot" class="wide" spellcheck="false" placeholder="D:\…\Obsidian库\FrameScribe">
+      <p class="hint">每个视频一个文件夹：原始记录 .md、字幕.md、raw.json、img\，整理版是「…-整理.md」。需要桥接程序；没装时只能用“导出到文件夹（手选）”。</p>
+    </section>
+
+    <section>
+      <h3>整理引擎</h3>
+      <div class="engines" id="engines">
+        <label class="eng"><input type="radio" name="engine" value="claude"><b>Claude Code</b><span>用你的 Claude 订阅 · 自己读图和字幕</span><em id="eClaude"></em></label>
+        <label class="eng"><input type="radio" name="engine" value="codex"><b>Codex</b><span>用你的 ChatGPT 订阅 · 自己读图和字幕</span><em id="eCodex"></em></label>
+        <label class="eng"><input type="radio" name="engine" value="api"><b>API</b><span>DeepSeek / 通义 / Kimi / OpenAI / Claude… 按量付费</span><em>填 Key</em></label>
+        <label class="eng"><input type="radio" name="engine" value="none"><b>只导出</b><span>不调用 AI，之后手动整理</span><em>&nbsp;</em></label>
+      </div>
+      <div class="row cli-only">
+        <label>Claude Code 模型 <input id="mClaude" placeholder="留空 = 默认"></label>
+        <label>Codex 模型 <input id="mCodex" placeholder="留空 = 默认"></label>
+      </div>
+    </section>
+
+    <section id="apiBox">
+      <h3>API</h3>
+      <div class="row">
+        <label>厂商预设
+          <select id="preset">
+            <option value="deepseek">DeepSeek</option>
+            <option value="qwen">通义千问（阿里百炼）</option>
+            <option value="kimi">Kimi（月之暗面）</option>
+            <option value="zhipu">智谱 GLM</option>
+            <option value="siliconflow">硅基流动</option>
+            <option value="openai">OpenAI</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="anthropic">Claude（Anthropic）</option>
+            <option value="custom">自定义</option>
+          </select>
+        </label>
+        <label>接口格式
+          <select id="kind"><option value="openai">OpenAI 兼容</option><option value="anthropic">Claude Messages</option></select>
+        </label>
+      </div>
+      <label class="blk">接口地址 <input id="baseUrl" class="wide" spellcheck="false"></label>
+      <label class="blk">API Key <input id="apiKey" class="wide" type="password" spellcheck="false" autocomplete="off"></label>
+      <label class="blk">模型名 <input id="model" class="wide" spellcheck="false"></label>
+      <p class="hint" id="modelHint"></p>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="sendImages"> 把截图一起发给模型（模型要能看图）</label>
+        <label>最多 <input id="maxImages" type="number" min="0" max="100" style="width:70px"> 张</label>
+      </div>
+      <div class="row"><button type="button" id="testApi" class="ghost">测试连接</button><span id="testOut" class="hint"></span></div>
+      <p class="hint">Key 只存在本机浏览器的扩展存储里。</p>
+    </section>
+
+    <div class="sh-foot"><span class="sp"></span><button type="button" id="saveSettings" class="primary">保存</button></div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast hide"></div>
+<script src="lib/db.js"></script>
+<script src="lib/note.js"></script>
+<script src="manager.js"></script>
+</body>
+</html>

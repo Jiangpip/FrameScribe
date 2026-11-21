@@ -1,0 +1,21 @@
+# 依赖和运行时（setup.cmd 会装）
+node_modules/
+# 语音模型（setup.cmd 会下载，单个文件超过 GitHub 100 MB 限制）
+app/models/
+# 运行日志（里面有本机路径、看过的视频、转写全文）
+host/logs/
+# 桥接注册文件（install-host.ps1 按本机路径生成）
+host/*.host.json
+host/*-host.cmd
+# 私人文档
+docs/private/
+# 系统 / 编辑器杂项
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.part
+.vscode/
+.idea/
+# 隐私词私表
+*.local.txt

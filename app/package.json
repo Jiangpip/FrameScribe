@@ -1,0 +1,18 @@
+{
+  "name": "framescribe",
+  "productName": "FrameScribe",
+  "version": "0.9.0",
+  "private": true,
+  "description": "FrameScribe：看视频时截图记笔记、转写、生成带时间的大纲",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^45.3.3",
+    "koffi": "^3.3.8",
+    "sherpa-onnx-node": "^2.0.1",
+    "ws": "^8.23.0"
+  }
+}

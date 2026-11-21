@@ -1,0 +1,78 @@
+{
+  "manifest_version": 3,
+  "name": "FrameScribe 视频笔记",
+  "version": "0.7.0",
+  "description": "看视频时按一下就截图、记时间点、写一句；取字幕或本机转写，生成带时间的大纲，点一下跳回那一秒。B 站 · YouTube · 课程回放。",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "alarms",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://*.bilibili.com/*",
+    "https://*.hdslb.com/*",
+    "https://*.polyv.cn/*",
+    "https://www.youtube.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "打开 FrameScribe 笔记本"
+  },
+  "commands": {
+    "capture": {
+      "suggested_key": {
+        "default": "Alt+S"
+      },
+      "description": "截图并记下时间点"
+    },
+    "capture-note": {
+      "suggested_key": {
+        "default": "Alt+A"
+      },
+      "description": "截图 + 写一句笔记"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/*"
+      ],
+      "js": [
+        "lib/md5.js",
+        "lib/bili.js",
+        "content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://*.polyv.cn/*",
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "page-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://*.polyv.cn/*",
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "panel.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1+bMsgClTRWi6UucsL7oRtGCQLULL+Di2QKiFO+YM8aVscUHCzI1jTY3e63lo4wqlkvHeoKyB5Tq4BcsjwNgwTyOc1ip8HRAAbeklcqNLKhB6utyZ7BahNLbAOuVV+3lMo+w4kJjyBfMu6HOScCVb2U+vsoO3ipGKkqgk89UB4bLAs8GaR73RujRw1bpFgtxNK8afFhi6ntduekxJWmT6sidJhU6nULJ/MSyCHzTPhg2GMy7UwxQx9yKLpOP+PDUrZZ+UcsA6qO1QvMesEkBgximI4hHtO6Yobk2VhpaQeK4mErVvrAtWX7DdksqdgW3p/BqD1nSjClFBbLwZ49AnwIDAQAB",
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ]
+}

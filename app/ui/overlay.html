@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>记录</title>
+<style>
+  * { box-sizing: border-box; font-family: "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif; }
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
+  body { padding: 8px; }
+  .card { background: #12151bf5; color: #e8ecf2; border: 1px solid #2a303b; border-left: 3px solid #ff7a2f; border-radius: 10px;
+    padding: 10px 12px 12px; box-shadow: 0 4px 14px #0009; }
+  .head { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; }
+  .tag { font: 600 11px/1 Consolas, monospace; color: #ff7a2f; letter-spacing: .08em; }
+  .tag.jot { color: #c9a0ff; font-family: inherit; }
+  .time { font: 600 14px Consolas, monospace; color: #fff; }
+  .no, .src { color: #8a93a3; }
+  .src { font: 11px Consolas, monospace; border: 1px solid #2a303b; border-radius: 999px; padding: 1px 7px; }
+  .src.ext { color: #3cc8d8; border-color: #3cc8d866; }
+  .sp { flex: 1; }
+  .x { background: none; border: 0; color: #8a93a3; font-size: 16px; cursor: pointer; padding: 0 4px; }
+  .x:hover { color: #fff; }
+  .strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+  .strip::-webkit-scrollbar { height: 4px; } .strip::-webkit-scrollbar-thumb { background: #333b48; border-radius: 2px; }
+  .fr { position: relative; flex: 0 0 auto; width: 96px; cursor: pointer; border-radius: 5px; overflow: hidden; border: 2px solid transparent; opacity: .7; }
+  .fr.on { border-color: #ff7a2f; opacity: 1; }
+  .fr:hover { opacity: 1; }
+  .fr img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #000; }
+  .fr span { position: absolute; left: 3px; bottom: 2px; font: 10px Consolas, monospace; color: #fff; text-shadow: 0 0 3px #000; }
+  .solo { font-size: 11px; color: #8a93a3; align-self: center; padding-left: 4px; }
+  input { width: 100%; margin-top: 8px; background: #0b0d11; color: #fff; border: 1px solid #333b48; border-radius: 6px; padding: 7px 9px; font-size: 13px; outline: none; user-select: text; }
+  input:focus { border-color: #ff7a2f; }
+  .hint { margin-top: 6px; font-size: 11px; color: #8a93a3; }
+  .hint.ok { color: #ff7a2f; }
+  .fr img { -webkit-user-drag: none; }
+  .msg { font-size: 13px; line-height: 1.6; }
+
+  .voice { display: flex; align-items: center; gap: 9px; margin-top: 9px; padding: 7px 9px; background: #0b0d11; border: 1px solid #333b48; border-radius: 6px; font-size: 12px; }
+  .voice .dot { width: 9px; height: 9px; border-radius: 50%; background: #5a6373; flex: 0 0 auto; }
+  .voice.live .dot { background: #ef6461; box-shadow: 0 0 8px #ef6461; animation: pulse 1s ease-in-out infinite; }
+  .voice.work .dot { background: #3cc8d8; animation: pulse .6s ease-in-out infinite; }
+  .voice.done .dot { background: #5bd18b; } .voice.fail .dot { background: #f0c04a; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .voice .vst { flex: 0 0 auto; min-width: 5em; }
+  .voice .meter { flex: 1; height: 6px; background: #1a1e26; border-radius: 3px; overflow: hidden; }
+  .voice .meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #3cc8d8, #ff7a2f); transition: width .06s linear; }
+  .voice .vt { font: 12px Consolas, monospace; color: #8a93a3; flex: 0 0 auto; }
+  .vtext { margin-top: 8px; font-size: 13px; line-height: 1.6; color: #fff; user-select: text; }
+  .vtext::before { content: "🎙 "; }
+</style>
+</head>
+<body>
+<div class="card" id="card"></div>
+<script src="overlay.js"></script>
+</body>
+</html>

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FrameScribe</title>
+<link rel="stylesheet" href="notebook.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span>FrameScribe <small>视频笔记</small></div>
+  <div class="sp"></div>
+  <div class="chip" id="extStat">插件：检测中…</div>
+  <div class="chip" id="asrStat"></div>
+  <button id="jotBtn" class="ghost jotbtn" title="开着时，新建的记录是随笔：不带字幕，整理成短随笔（看电影、审美积累用）。已有的记录在右边单独切换">随笔模式 · 关</button>
+  <button id="recBtn" class="ghost recbtn" title="把电脑正在播放的声音转成文字，当作这节课的字幕">● 开始听课</button>
+  <div class="engine-chip" id="engineChip"></div>
+  <button id="openSettings" class="ghost">⚙ 设置</button>
+</header>
+<div class="layout">
+  <aside id="sessions"></aside>
+  <main id="detail">
+    <div class="empty">
+      <h2>还没有记录</h2>
+      <p>在任何正在播放的视频上按快捷键，视频不会暂停。</p>
+      <div class="cards">
+        <div><kbd id="k1">Alt+S</kbd><p>截图，记下时间点</p></div>
+        <div><kbd id="k2">Alt+A</kbd><p>截图 + 写一句</p></div>
+        <div><kbd id="k3">Alt+D</kbd><p>截图 + 说一句（自动转成文字）</p></div>
+        <div><kbd id="k4">Alt+L</kbd><p>听课：把视频里说的话全程转成文字，没字幕的课也能整理</p></div>
+      </div>
+      <p>B 站 / YouTube 网页配合浏览器插件：截的是视频原画，时间点能点回视频，还能拿到字幕。其他情况截的是最前面的窗口。</p>
+    </div>
+  </main>
+</div>
+
+<dialog id="settings">
+  <form method="dialog" class="sheet">
+    <div class="sh-head"><h2>设置</h2><span class="sp"></span><button value="cancel" class="ghost">关闭</button></div>
+
+    <section>
+      <h3>状态</h3>
+      <div id="statDetail" class="statgrid"></div>
+    </section>
+
+    <section>
+      <h3>快捷键</h3>
+      <div class="keys">
+        <label>截图 <input id="keyCapture" spellcheck="false"><em id="ksCapture"></em></label>
+        <label>截图 + 写一句 <input id="keyNote" spellcheck="false"><em id="ksNote"></em></label>
+        <label>截图 + 说一句 <input id="keyVoice" spellcheck="false"><em id="ksVoice"></em></label>
+        <label>开始 / 结束听课 <input id="keyRecord" spellcheck="false"><em id="ksRecord"></em></label>
+      </div>
+      <p class="hint">写法如 <code>Alt+S</code>、<code>Ctrl+Shift+1</code>、<code>F8</code>。软件开着时这几个键在所有程序里都归它；和别的软件冲突就在这里改。</p>
+    </section>
+
+    <section>
+      <h3>截屏与语音</h3>
+      <div class="row">
+        <label>没有插件时截
+          <select id="crop"><option value="window">最前面的窗口</option><option value="screen">整个屏幕</option></select>
+        </label>
+        <label>语音语言
+          <select id="lang"><option value="auto">自动（中英混说）</option><option value="zh">中文</option><option value="en">英文</option><option value="yue">粤语</option><option value="ja">日语</option><option value="ko">韩语</option></select>
+        </label>
+        <label class="chk"><input type="checkbox" id="autoStop"> 说完停顿 1.5 秒自动结束</label>
+      </div>
+      <p class="hint">语音在本机转写，不联网。外放看视频时麦克风会把视频的声音也录进去，戴耳机效果最好；外放时“停顿自动结束”可能不触发，再按一次快捷键结束。</p>
+      <p class="hint">听课录的是电脑播放的声音（不是麦克风），戴不戴耳机都行；同时响的其他声音（消息提示音、别的视频）也会被转进去。声音本身不保存，只留文字。</p>
+    </section>
+
+    <section>
+      <h3>导出位置</h3>
+      <input id="exportRoot" class="wide" spellcheck="false" placeholder="D:\…\Obsidian库\FrameScribe">
+      <p class="hint">每个视频一个文件夹：原始记录 .md、字幕.md、raw.json、img\，整理版是「…-整理.md」。</p>
+      <label class="blk">随笔导出位置 <input id="jotRoot" class="wide" spellcheck="false"></label>
+      <p class="hint">随笔不带字幕，只有截图、你写的话和一篇短随笔。留空 = 上面的导出位置下的「随笔」文件夹。</p>
+    </section>
+
+    <section>
+      <h3>整理引擎</h3>
+      <div class="engines" id="engines">
+        <label class="eng"><input type="radio" name="engine" value="claude"><b>Claude Code</b><span>用你的 Claude 订阅 · 自己读图和字幕</span><em id="eClaude"></em></label>
+        <label class="eng"><input type="radio" name="engine" value="codex"><b>Codex</b><span>用你的 ChatGPT 订阅 · 自己读图和字幕</span><em id="eCodex"></em></label>
+        <label class="eng"><input type="radio" name="engine" value="api"><b>API</b><span>DeepSeek / 通义 / Kimi / OpenAI / Claude… 按量付费</span><em>填 Key</em></label>
+        <label class="eng"><input type="radio" name="engine" value="none"><b>只导出</b><span>不调用 AI，之后手动整理</span><em>&nbsp;</em></label>
+      </div>
+      <div class="row cli-only">
+        <label>Claude Code 模型 <input id="mClaude" placeholder="留空 = 默认"></label>
+        <label>Codex 模型 <input id="mCodex" placeholder="留空 = 默认"></label>
+      </div>
+    </section>
+
+    <section id="apiBox">
+      <h3>API</h3>
+      <div class="row">
+        <label>厂商预设
+          <select id="preset">
+            <option value="deepseek">DeepSeek</option>
+            <option value="qwen">通义千问（阿里百炼）</option>
+            <option value="kimi">Kimi（月之暗面）</option>
+            <option value="zhipu">智谱 GLM</option>
+            <option value="siliconflow">硅基流动</option>
+            <option value="openai">OpenAI</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="anthropic">Claude（Anthropic）</option>
+            <option value="custom">自定义</option>
+          </select>
+        </label>
+        <label>接口格式
+          <select id="kind"><option value="openai">OpenAI 兼容</option><option value="anthropic">Claude Messages</option></select>
+        </label>
+      </div>
+      <label class="blk">接口地址 <input id="baseUrl" class="wide" spellcheck="false"></label>
+      <label class="blk">API Key <input id="apiKey" class="wide" type="password" spellcheck="false" autocomplete="off"></label>
+      <label class="blk">模型名 <input id="model" class="wide" spellcheck="false"></label>
+      <p class="hint" id="modelHint"></p>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="sendImages"> 把截图一起发给模型（模型要能看图）</label>
+        <label>最多 <input id="maxImages" type="number" min="0" max="100" style="width:70px"> 张</label>
+      </div>
+      <div class="row"><button type="button" id="testApi" class="ghost">测试连接</button><span id="testOut" class="hint"></span></div>
+      <p class="hint">Key 只存在本机的设置文件里。</p>
+    </section>
+
+    <div class="sh-foot"><span class="sp"></span><button type="button" id="saveSettings" class="primary">保存</button></div>
+  </form>
+</dialog>
+
+<dialog id="welcome">
+  <form method="dialog" class="sheet">
+    <div class="sh-head"><h2>欢迎使用 FrameScribe</h2><span class="sp"></span></div>
+    <p class="hint">看视频时按快捷键截图、记一句；没字幕的课也能本机转写；最后让 AI 整理成带时间的笔记，点时间跳回那一秒。先确认三件事：</p>
+    <section>
+      <h3>1 · 本机检查</h3>
+      <div id="wCheck" class="statgrid"></div>
+    </section>
+    <section>
+      <h3>2 · 笔记存到哪</h3>
+      <input id="wRoot" class="wide" spellcheck="false">
+      <p class="hint">用 Obsidian 的话，填库里的一个文件夹，比如 <code>D:\Obsidian库\视频笔记</code>。之后在 ⚙ 设置 里随时能改。</p>
+    </section>
+    <section>
+      <h3>3 · 记住四个键（在任何程序里都能按）</h3>
+      <div class="wkeys">
+        <div><kbd id="wk1"></kbd><span>截图 + 记时间点</span></div>
+        <div><kbd id="wk2"></kbd><span>截图 + 写一句</span></div>
+        <div><kbd id="wk3"></kbd><span>截图 + 说一句</span></div>
+        <div><kbd id="wk4"></kbd><span>开始 / 结束听课</span></div>
+      </div>
+    </section>
+    <div class="sh-foot"><button type="button" id="wSettings" class="ghost">打开完整设置</button><span class="sp"></span><button type="button" id="wGo" class="primary">开始用</button></div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast hide"></div>
+<script src="../../extension/lib/note.js"></script>
+<script src="notebook.js"></script>
+</body>
+</html>
