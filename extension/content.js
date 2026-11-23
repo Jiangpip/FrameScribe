@@ -109,14 +109,14 @@
   }
 
   // 截当前画面 + 从前 15 秒里挑候选。插件自己用，桌面软件来要图时也用
-  function grab() {
+  function grab(shot) { // shot = 软件设置里的截图清晰度 { w, q }
     const k = pageKey(), v = video();
     if (!k) return { error: epId() ? '还在查这一集的编号，过两秒再按' : '这个页面认不出视频编号（BV 号）' };
     if (!v) return { error: '没找到正在播放的视频' };
     if (v.mediaKeys) return { error: '这个视频是加密播放的，浏览器不让截画面' }; // 加密视频画到画布上是一片黑，不如直接说
     const t = v.currentTime;
     let main, ms;
-    try { main = frame(v, MAIN_W, 0.9); ms = sig(v); }
+    try { main = frame(v, shot && shot.w || MAIN_W, shot && shot.q || 0.9); ms = sig(v); }
     catch (e) { return { error: '画面被浏览器保护，截不了（可能是加密的付费内容）' }; }
 
     // 从新到旧挑出和“现在”及彼此明显不同的画面
@@ -156,8 +156,8 @@
 
   // —— 桌面软件开着时：软件管快捷键和弹窗，这里只负责交出原画、时间点和字幕 ——
   const appSubsAsked = new Set();
-  async function appCapture() {
-    const g = grab();
+  async function appCapture(shot) {
+    const g = grab(shot);
     if (g.error) return { ok: false, reason: g.error };
     const session = await sessionMeta(g.k);
     if (!appSubsAsked.has(g.k.id) && session.aid) {
@@ -166,6 +166,9 @@
     }
     return { ok: true, session, t: g.t, frames: g.frames, chosen: g.chosen };
   }
+  // 大纲面板（panel.js，和这里同一个内容脚本环境）要用：认视频编号、视频信息。截图和大纲进同一条记录
+  globalThis.BN_biliPage = { pageKey, sessionMeta, epId };
+
   // 叫醒后台去连软件：打开视频页、切回这个标签页时立刻试一次，平时每 15 秒一次
   const beat = () => { if (pageKey()) send({ type: 'hb' }); };
   setInterval(beat, 15000);
@@ -174,7 +177,7 @@
 
   chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     if (msg.type === 'cmd') { capture(msg.name === 'capture-note'); reply({ ok: true }); return; }
-    if (msg.type === 'app-capture') { appCapture().then(reply, e => reply({ ok: false, reason: String(e.message || e) })); return true; }
+    if (msg.type === 'app-capture') { appCapture(msg.shot).then(reply, e => reply({ ok: false, reason: String(e.message || e) })); return true; }
     if (msg.type === 'app-saved') { const k = pageKey(); if (k && k.id === msg.sessionId) { count = msg.count; renderPill(); } return; }
     if (msg.type === 'fetch-subs') {
       (async () => {

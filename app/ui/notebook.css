@@ -191,3 +191,10 @@ dialog::backdrop { background: #000a; }
 .wkeys { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 18px; font-size: 13px; }
 .wkeys div { display: flex; align-items: center; gap: 10px; }
 .wkeys kbd { min-width: 64px; text-align: center; color: var(--accent); border-color: var(--accent); }
+/* 归类：分类 / 课程 / 知识点 */
+.place { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; margin-top: 8px; font-size: 13px; }
+.place input { font: inherit; font-size: 13px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; width: 9em; }
+.place #plCourse { width: 14em; }
+.place #plTopic { width: 12em; font-weight: 600; }
+.place .pl-sep, .place .pl-hint { color: var(--dim); }
+.place button { padding: 1px 10px; font-size: 12px; }

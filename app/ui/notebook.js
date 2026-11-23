@@ -97,7 +97,7 @@ function fillSettings() {
   $('#jotRoot').value = cfg.jotRoot || '';
   $('#jotRoot').placeholder = cfg.exportRoot.replace(/\\+$/, '') + '\\随笔';
   $('#keyCapture').value = cfg.keys.capture; $('#keyNote').value = cfg.keys.note; $('#keyVoice').value = cfg.keys.voice; $('#keyRecord').value = cfg.keys.record;
-  $('#crop').value = cfg.crop; $('#lang').value = cfg.voice.lang; $('#autoStop').checked = cfg.voice.autoStop;
+  $('#crop').value = cfg.crop; $('#shot').value = cfg.shot || 'original'; $('#lang').value = cfg.voice.lang; $('#autoStop').checked = cfg.voice.autoStop;
   document.querySelectorAll('input[name=engine]').forEach(r => r.checked = r.value === cfg.engine);
   $('#mClaude').value = cfg.cliModel.claude || '';
   $('#mCodex').value = cfg.cliModel.codex || '';
@@ -119,6 +119,7 @@ function readSettings() {
     jotRoot: $('#jotRoot').value.trim(),
     keys: { capture: $('#keyCapture').value.trim(), note: $('#keyNote').value.trim(), voice: $('#keyVoice').value.trim(), record: $('#keyRecord').value.trim() },
     crop: $('#crop').value,
+    shot: $('#shot').value,
     voice: { lang: $('#lang').value, autoStop: $('#autoStop').checked },
     engine: (document.querySelector('input[name=engine]:checked') || {}).value || 'claude',
     cliModel: { claude: $('#mClaude').value.trim(), codex: $('#mCodex').value.trim() },
@@ -164,7 +165,7 @@ $('#testApi').onclick = async () => {
 // —— 列表与详情 ——
 const isScreen = s => s.kind === 'screen';
 const isJot = s => s.mode === 'jot';
-const kindTag = (s, jotTag = true) => (isScreen(s) ? '<span class="kind">截屏</span>' : s.kind === 'web' ? `<span class="kind web">${s.site === 'youtube' ? 'YouTube' : '回放'}</span>` : '<span class="kind bili">B站</span>') + (jotTag && isJot(s) ? '<span class="kind jot">随笔</span>' : '');
+const kindTag = (s, jotTag = true) => (isScreen(s) ? '<span class="kind">截屏</span>' : s.kind === 'web' ? `<span class="kind web">${s.site === 'youtube' ? 'YouTube' : s.site === 'vimeo' ? 'Vimeo' : '回放'}</span>` : '<span class="kind bili">B站</span>') + (jotTag && isJot(s) ? '<span class="kind jot">随笔</span>' : '');
 
 async function loadSessions() {
   sessions = await bg({ type: 'sessions' });
@@ -174,7 +175,7 @@ async function loadSessions() {
     const d = document.createElement('div');
     d.className = 'sess' + (current && current.id === s.id ? ' on' : '');
     const st = s.job && s.job.state === 'done' ? ' · ✓整理' : s.job && s.job.state === 'running' ? ' · 整理中' : '';
-    d.innerHTML = `<div class="t">${esc(s.title)}${s.part ? ' · ' + esc(s.part) : ''}</div>
+    d.innerHTML = `<div class="t">${s.topic ? esc(s.topic) + ` <span style="color:var(--dim)">· ${esc(s.title)}</span>` : esc(s.title) + (s.part ? ' · ' + esc(s.part) : '')}</div>
       <div class="m">${kindTag(s)}<span><b>${s.count}</b> 条</span><span>${esc(isScreen(s) ? s.app : s.owner)}</span><span>${new Date(s.updatedAt).toLocaleDateString()}${st}</span></div>`;
     d.onclick = () => open(s.id);
     side.appendChild(d);
@@ -228,6 +229,31 @@ function renderJob() {
   box.querySelectorAll('[data-reveal]').forEach(a => a.onclick = () => bg({ type: 'reveal', path: a.dataset.reveal }));
 }
 
+// 「归类」：分类 / 课程 / 知识点，决定导出到 <分类>\<课程>\<序号 知识点>\；改了以后已导出的文件跟着搬
+function placeRow(p, jot) {
+  if (!p) return '';
+  const f = (id, v, ph, tip) => `<input id="${id}" value="${esc(v)}" placeholder="${ph}" title="${tip}" spellcheck="false"${id === 'plCat' ? ' list="plCats"' : ''}>`;
+  return `<div class="place" title="导出位置：${esc(p.where)}">
+    ${jot ? '<span class="pl-hint">随笔放在随笔文件夹，只用知识点名</span>' : `${f('plCat', p.cat, '分类', '领域分类（导出位置下的第一层文件夹）')}<span class="pl-sep">/</span>
+    ${f('plCourse', p.course, p.inGroup ? p.group : '课程（可空）', p.inGroup ? '这门课的中文名；改了整门课一起搬' : '课程 / 系列名（可空）')}<span class="pl-sep">/</span>`}
+    ${f('plTopic', p.topic, '知识点（笔记名）', '这条笔记讲的知识点，也是文件名；空着就用视频标题')}
+    <button id="plSave" class="ghost" style="display:none">保存归类</button>
+    <datalist id="plCats">${p.cats.map(c => `<option value="${esc(c)}">`).join('')}</datalist></div>`;
+}
+function bindPlace(s) {
+  const ids = ['plCat', 'plCourse', 'plTopic'].filter(id => $('#' + id)), btn = $('#plSave');
+  if (!btn) return;
+  const show = () => { btn.style.display = ''; };
+  ids.forEach(id => { const el = $('#' + id); el.oninput = show; el.onkeydown = e => { if (e.key === 'Enter') btn.click(); }; });
+  btn.onclick = async () => {
+    const v = k => $('#' + k) ? $('#' + k).value : undefined;
+    btn.disabled = true;
+    const r = await bg({ type: 'session-place', sid: s.id, place: { cat: v('plCat'), course: v('plCourse'), topic: v('plTopic') } });
+    btn.disabled = false;
+    if (r.ok) { toast('已归类：' + r.dir); loadSessions(); } else toast(r.detail, 7000);
+  };
+}
+
 async function renderDetail() {
   const data = await bg({ type: 'session', id: current.id });
   if (!data) { current = null; $('#detail').innerHTML = ''; return; }
@@ -244,10 +270,11 @@ async function renderDetail() {
         <div class="meta">${kindTag(s, false)}${head}<span>${marks.length} 个记录点</span>${jot ? '<span class="badge jot">不带字幕</span>' : subsBadge(s)}
           <span class="seg" id="modeSeg" title="这条记录整理成什么：学习笔记带字幕、按主题整理；随笔只用截图和你写的话，整理成短随笔">
             <button data-m="study" class="${jot ? '' : 'on'}">学习笔记</button><button data-m="jot" class="${jot ? 'on' : ''}">随笔</button></span></div>
+        ${placeRow(data.place, jot)}
       </div>
       <div class="acts">
         ${isScreen(s) || jot || s.kind === 'web' ? '' : '<button id="refetch" class="ghost">重新取字幕</button>'}
-        ${s.kind === 'web' && cfg.engine !== 'none' && body && body.length ? '<button id="outline" class="ghost" title="按转写的文字生成带时间的目录，写成「…-大纲.md」；网页上的大纲面板也会显示">生成大纲</button>' : ''}
+        ${(s.kind === 'web' || (!isScreen(s) && !jot)) && cfg.engine !== 'none' && body && body.length ? '<button id="outline" class="ghost" title="按转写的文字生成带时间的目录，写成「…-大纲.md」；网页上的大纲面板也会显示">生成大纲</button>' : ''}
         <button id="delSess" class="ghost danger">删除</button>
         <button id="exportOnly" class="ghost">仅导出</button>
         ${cfg.engine !== 'none' ? `<button id="organize" class="primary">${jot ? '导出并整理成随笔' : '导出并整理'} · ${esc(ENGINE_NAME[cfg.engine])}</button>` : ''}
@@ -267,6 +294,7 @@ async function renderDetail() {
     const r = await bg({ type: 'session-rename', sid: s.id, title: t });
     if (r.ok) { s.title = t; loadSessions(); } else { ttl.textContent = s.title; toast(r.detail); }
   };
+  bindPlace(s);
   const tl = $('#tlines');
   if (tl && s.recording) tl.scrollTop = tl.scrollHeight;
   if ($('#refetch')) $('#refetch').onclick = refetch;

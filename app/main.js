@@ -42,8 +42,12 @@ const DEFAULTS = {
   voice: { autoStop: true, lang: 'auto' },
   crop: 'window', // window = 只截最前面的窗口；screen = 整个屏幕
   jotDefault: false, // 开着时，新建的记录是“随笔”：不带字幕，整理成短随笔（看电影、审美积累用）
-  jotRoot: ''        // 随笔导出位置；空 = 导出位置下的「随笔」
+  jotRoot: '',       // 随笔导出位置；空 = 导出位置下的「随笔」
+  shot: 'original'   // 插件截图清晰度：original 原画 / high 最宽 1920 / small 最宽 1280（见 SHOT）
 };
+// 插件截视频画面的尺寸和 JPEG 质量；原画 = 视频本身多大就多大（4K 视频也照截）
+const SHOT = { original: { w: 3840, q: 0.92 }, high: { w: 1920, q: 0.88 }, small: { w: 1280, q: 0.8 } };
+const shotCfg = () => SHOT[settings.shot] || SHOT.original;
 const SETTINGS = path.join(DATA, 'settings.json');
 const FIRST_RUN = !fs.existsSync(SETTINGS); // 没有设置文件 = 第一次用：笔记本里显示欢迎引导
 function loadSettings() {
@@ -218,7 +222,7 @@ function askExt(ws, msg, ms) {
 }
 async function captureViaExt() {
   if (!exts.size) return null;
-  const rs = await Promise.all([...exts].map(ws => askExt(ws, { type: 'capture' }, 900)));
+  const rs = await Promise.all([...exts].map(ws => askExt(ws, { type: 'capture', shot: shotCfg() }, 900)));
   const hit = rs.find(r => r && r.ok && r.session && Array.isArray(r.frames) && r.frames.length) || null;
   if (!hit && DEBUG) log('插件没交图：', rs.map(r => r ? r.reason || 'ok 但内容不全' : '超时').join(' / '));
   return hit;
@@ -405,6 +409,16 @@ function mergeRanges(rs) {
 }
 // 插件交来的网页视频信息 → 记录的 session（用户在笔记本里改过标题就不覆盖）
 function webSession(meta) {
+  // B 站视频页的大纲面板：和 Alt+S 截图用同一条记录（BV号_p1），保持 B 站记录的字段，时间链接用 B 站自己的 t=秒
+  if (meta.kind === 'bili') {
+    const s = { id: String(meta.id || ''), kind: 'bili', bvid: String(meta.bvid || ''), p: +meta.p || 1, aid: +meta.aid || 0, cid: +meta.cid || 0,
+      title: String(meta.title || '未命名').slice(0, 120), part: String(meta.part || '').slice(0, 60), owner: String(meta.owner || '').slice(0, 80),
+      duration: +meta.duration || 0, url: String(meta.url || '') };
+    if (+meta.ep) s.ep = +meta.ep;
+    const old = store.load(s.id);
+    if (old && old.session.renamed) s.title = old.session.title;
+    return s;
+  }
   const s = { id: String(meta.id || ''), kind: 'web', site: String(meta.site || ''), title: String(meta.title || '未命名').slice(0, 120), part: String(meta.part || '').slice(0, 60),
     url: String(meta.url || ''), duration: +meta.duration || 0, owner: String(meta.owner || meta.siteName || '').slice(0, 80) };
   const old = store.load(s.id);
@@ -435,7 +449,7 @@ async function lecStart(ws, meta) {
   lec = { sid, ws, body: (old && store.subs(sid)) || [], fresh: new Set(), dirty: false, lastSave: Date.now(), lastNb: 0, stopping: false, onDone: null };
   changed(sid);
   log('lec start', sid);
-  return { ok: true, sid };
+  return { ok: true, sid, shot: shotCfg() };
 }
 async function lecStop(reason) {
   const l = lec;
@@ -452,9 +466,9 @@ async function lecStop(reason) {
 }
 function lecState(sid) {
   const r = store.load(sid);
-  if (!r) return { ok: true, exists: false };
+  if (!r) return { ok: true, exists: false, shot: shotCfg() };
   const s = r.session;
-  return { ok: true, exists: true, keys: store.keys(sid).length, session: { id: s.id, title: s.title, part: s.part, duration: s.duration, subs: s.subs || null, lec: s.lec || null, job: s.job || null, transcribing: !!(lec && lec.sid === sid), marks: r.marks.length },
+  return { ok: true, exists: true, shot: shotCfg(), keys: store.keys(sid).length, session: { id: s.id, title: s.title, part: s.part, duration: s.duration, subs: s.subs || null, lec: s.lec || null, job: s.job || null, transcribing: !!(lec && lec.sid === sid), marks: r.marks.length },
     body: lec && lec.sid === sid ? lec.body : (store.subs(sid) || []), outline: store.outline(sid) };
 }
 async function onLec(ws, m) {
@@ -631,6 +645,12 @@ async function hotkey(name) {
 }
 
 // —— 界面发来的请求 ——
+// 详情页「归类」一行：现在的分类 / 课程 / 知识点，和可选的分类
+function placeForUi(s) {
+  const c = s.group ? store.library().courses[s.group] || {} : null;
+  let where = ''; try { where = org.where(store, settings, s).dir; } catch (e) {}
+  return { inGroup: !!s.group, group: s.group || '', cat: c ? c.cat || '' : s.cat || '', course: c ? c.name || '' : s.course || '', topic: s.topic || '', cats: org.categories(store), where };
+}
 function sessionForUi(id) {
   const rec = store.load(id);
   if (!rec) return null;
@@ -642,7 +662,8 @@ function sessionForUi(id) {
       frames: m.frames.map(f => ({ ...f, url: pathToFileURL(store.framePath(id, f)).href })),
       voiceUrl: m.voice && m.voice.file ? pathToFileURL(path.join(store.dir(id), m.voice.file)).href : ''
     })),
-    body: s.subs && s.subs.status === 'ok' ? store.subs(id) : null
+    body: s.subs && s.subs.status === 'ok' ? store.subs(id) : null,
+    place: placeForUi(s)
   };
 }
 function status() {
@@ -689,7 +710,12 @@ async function handle(msg, sender) {
       const title = String(msg.title || '').replace(/\s+/g, ' ').trim().slice(0, 120);
       if (!title) return { ok: false, detail: '标题不能为空' };
       store.patchSession(msg.sid, { title, renamed: true });
+      try { org.relocate(store, settings, msg.sid); } catch (e) { log('relocate', e); } // 没起知识点名的笔记用标题当文件名：已导出的跟着改名
       return { ok: true };
+    }
+    case 'session-place': { // 改分类 / 课程 / 知识点：已导出的文件跟着搬
+      try { const w = org.setPlace(store, settings, msg.sid, msg.place || {}); changed(msg.sid); return { ok: true, dir: w.dir }; }
+      catch (e) { log('session-place', e); return { ok: false, detail: String(e.message || e) }; }
     }
     case 'export':
     case 'organize':

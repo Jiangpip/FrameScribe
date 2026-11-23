@@ -143,7 +143,9 @@ function organize(msg, onProgress) {
           // 真正的失败原因（模型不可用、额度用完等）；“忽略了某些设置”之类的提醒不算
           const em = j.type === 'turn.failed' ? j.error && j.error.message : j.type === 'error' ? j.message : '';
           if (em) codexErr = String(em).slice(0, 300);
-          const what = it.command || (it.type === 'reasoning' ? '思考中' : it.type) || j.type;
+          // 进度只显示看得懂的；item 类型 error 是 Codex 的提醒（配置项被忽略、技能太多被裁掉），不影响整理，不显示
+          const what = it.command || { reasoning: '思考中', agent_message: '写出结果', file_change: '改文件', web_search: '搜索' }[it.type]
+            || (j.type === 'turn.started' ? '开始整理' : '');
           if (what) progress(String(what));
         }
       }

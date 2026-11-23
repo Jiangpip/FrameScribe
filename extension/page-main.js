@@ -1,17 +1,23 @@
-// 网页播放器那一半：在“页面自己的环境”里跑（manifest 里 world: MAIN，document_start）。现在支持两种页面：
+// 网页播放器那一半：在“页面自己的环境”里跑（manifest 里 world: MAIN，document_start）。现在支持三种页面：
 //   - 保利威直播回放（*.polyv.cn）：自家 WASM 播放器，画面画在 canvas 上、声音走 WebAudio，没有普通的 <video>
 //   - YouTube（www.youtube.com/watch）：普通 <video> + 页面里的 movie_player 接口；另外能取 YouTube 自己的字幕
+//   - Vimeo（vimeo.com/<id>、player.vimeo.com/video/<id>）：普通 <video>（MSE）；字幕是页面上 <track> 指向的 VTT
+//   - B 站视频页：普通 <video>；字幕由插件那一半用 B 站接口取（content.js / lib/bili.js，带登录状态），这里只管播放器和声音
 // 做的事：
 //   1. 找到播放器（读进度、跳转、倍速、播放 / 暂停）
 //   2. 把它的声音接一路出来，降到 16 kHz 单声道交给插件（转写时可以不出声）
 //   3. 转写期间标签页切到后台也不降速（浏览器会把后台网页的定时器限到每秒一次，播放器就卡住了）
-//   4. YouTube：取字幕全文
+//   4. YouTube / Vimeo：取字幕全文
 // 和插件那一半（panel.js）用 window.postMessage 说话，消息都带 tag: 'bn-polyv'
 (() => {
   if (window.__bnPage) return;
   window.__bnPage = 1;
   const TAG = 'bn-polyv';
   const YT = /(^|\.)youtube\.com$/.test(location.hostname);
+  const VM = /(^|\.)vimeo\.com$/.test(location.hostname);
+  const BL = /(^|\.)bilibili\.com$/.test(location.hostname);
+  const GEN = VM || BL; // 普通 <video>，没有站点自己的播放器接口
+  const VID = YT || GEN; // 普通 <video> 播放器
   const out = (m, transfer) => window.postMessage({ tag: TAG, dir: 'out', ...m }, '*', transfer || []);
   const sleep = ms => new Promise(r => window.setTimeout(r, ms));
 
@@ -35,7 +41,7 @@
     }
     return true;
   }
-  if (!YT && !hookPlayer()) { const iv = setInterval(() => { if (hookPlayer()) clearInterval(iv); }, 300); }
+  if (!VID && !hookPlayer()) { const iv = setInterval(() => { if (hookPlayer()) clearInterval(iv); }, 300); }
 
   // YouTube：包一层，接口和保利威播放器一样（currentTime 毫秒、duration 秒、seek(毫秒)…）
   const mp = () => document.getElementById('movie_player');
@@ -54,14 +60,59 @@
     get playbackRate() { const v = vEl(); return v ? v.playbackRate : 1; },
     set playbackRate(x) { const m = mp(); if (m && m.setPlaybackRate) m.setPlaybackRate(x); const v = vEl(); if (v) v.playbackRate = x; }
   };
-  const alive = p => YT ? !!vEl() : pvAlive(p);
-  const P = () => YT ? (vEl() ? ytp : null) : (pvAlive(player) ? player : null);
+  // Vimeo：页面上可能有好几个 <video>（推荐视频的预览之类），取有时长、画面最大的那个
+  const vmVideo = () => {
+    if (BL) { // B 站：播放器里的那个（页面上还可能有推荐视频的预览）
+      const v = document.querySelector('#bilibili-player video, .bpx-player-container video, .bpx-player-video-wrap video');
+      if (v && isFinite(v.duration) && v.duration > 0) return v;
+    }
+    let best = null, area = 0;
+    for (const v of document.querySelectorAll('video')) {
+      const a = (v.videoWidth || v.clientWidth) * (v.videoHeight || v.clientHeight);
+      if (isFinite(v.duration) && v.duration > 0 && a >= area) { best = v; area = a; }
+    }
+    return best;
+  };
+  const vmId = () => (location.pathname.match(/^\/(?:video\/)?(\d{5,})(?:\/|$)/) || [])[1] || '';
+  const vmp = {
+    get currentTime() { const v = vmVideo(); return v ? v.currentTime * 1000 : 0; },
+    get duration() { const v = vmVideo(); return v ? v.duration : 0; },
+    get paused() { const v = vmVideo(); return !v || v.paused; },
+    get status() { return ''; },
+    seek(ms) { const v = vmVideo(); if (v) v.currentTime = ms / 1000; },
+    play() { const v = vmVideo(); if (v) v.play().catch(() => {}); },
+    pause() { const v = vmVideo(); if (v) v.pause(); },
+    get playbackRate() { const v = vmVideo(); return v ? v.playbackRate : 1; },
+    set playbackRate(x) { const v = vmVideo(); if (v) v.playbackRate = x; }
+  };
+  // Vimeo 的标题、作者、日期：页面标签 + oEmbed（vimeo.com 自己的公开接口），每个视频查一次
+  const vmMeta = {};
+  function vmInfo() {
+    const id = vmId();
+    if (!id) return null;
+    if (!vmMeta[id]) {
+      vmMeta[id] = { title: '', author: '', date: '' };
+      fetch('https://vimeo.com/api/oembed.json?url=' + encodeURIComponent('https://vimeo.com/' + id))
+        .then(r => r.ok ? r.json() : null)
+        .then(j => { if (j) Object.assign(vmMeta[id], { title: j.title || '', author: j.author_name || '', date: String(j.upload_date || '').slice(0, 10) }); })
+        .catch(() => {});
+    }
+    const og = document.querySelector('meta[property="og:title"]');
+    const m = vmMeta[id], v = vmVideo();
+    return {
+      id, title: m.title || (og && og.content) || document.title.replace(/\s*(\|[^|]*)?\s*on Vimeo$/i, '').trim(),
+      author: m.author, date: m.date, len: v ? Math.round(v.duration) : 0, caps: vmTracks().length
+    };
+  }
+  const alive = p => YT ? !!vEl() : GEN ? !!vmVideo() : pvAlive(p);
+  const P = () => YT ? (vEl() ? ytp : null) : GEN ? (vmVideo() ? vmp : null) : (pvAlive(player) ? player : null);
   function state() {
     const p = P();
     if (!p) return { ready: false };
     let vt = 0, rate = 1;
     try { vt = +p.currentTime || 0; rate = +p.playbackRate || 1; } catch (e) {}
     const s = { ready: true, vt, dur: +p.duration || 0, paused: !!p.paused, rate, status: String(p.status || '') };
+    if (VID && tap.on) s.locked = locked();
     if (YT) {
       const r = pr(), d = r && r.videoDetails;
       if (isAd()) { s.ready = false; s.ad = true; } // 广告时 <video> 放的是广告，进度不是正片的
@@ -71,6 +122,7 @@
         caps: ((r.captions && r.captions.playerCaptionsTracklistRenderer && r.captions.playerCaptionsTracklistRenderer.captionTracks) || []).length
       } : null;
     }
+    if (VM) s.info = vmInfo();
     return s;
   }
 
@@ -79,15 +131,23 @@
   const oc = AudioNode.prototype.connect, od = AudioNode.prototype.disconnect;
   // 保利威：记下所有接到扬声器的节点；转写时把它们改接到我们的 ScriptProcessor 上
   const outs = []; // { node, ctx }
-  if (!YT) {
+  // B 站：播放器可能自己已经把 <video> 接进了 WebAudio（音量均衡之类），同一个 <video> 不能再接第二次，
+  // 所以也记下页面接到扬声器的节点、页面给 <video> 建的源节点；转写时从页面的源节点取声音，不出声就断开页面接扬声器的那几个
+  if (!VID || BL) {
     AudioNode.prototype.connect = function (dest, ...rest) {
       if (dest instanceof AudioDestinationNode && !this.__bnTap) {
         const ent = { node: this, ctx: dest.context };
         if (!outs.some(e => e.node === this)) outs.push(ent);
-        if (tap.on) { attach(ent); if (tap.mute) return dest; } // 转写中又接了新的：直接接到我们这，不出声
+        if (tap.on && (!VID || (ya && ya.page && ya.ctx === ent.ctx))) { if (!VID) attach(ent); if (tap.mute) return dest; } // 转写中又接了新的：接到我们这 / 不出声
       }
       return oc.call(this, dest, ...rest);
     };
+  }
+  const pageSrc = new WeakMap(); // <video> → 页面自己建的 MediaElementAudioSourceNode
+  if (BL) {
+    const cm = BaseAudioContext.prototype.createMediaElementSource || AudioContext.prototype.createMediaElementSource;
+    const host = BaseAudioContext.prototype.createMediaElementSource ? BaseAudioContext.prototype : AudioContext.prototype;
+    host.createMediaElementSource = function (el) { const n = cm.call(this, el); if (!this.__bnOwn) pageSrc.set(el, n); return n; };
   }
 
   let acc = new Float32Array(16000), accN = 0, frac = 0, sum = 0, sumN = 0, lastVt = null, lastAt = 0;
@@ -135,34 +195,54 @@
     try { oc.call(ent.node, spFor(ent.ctx)); } catch (e) {}
     if (tap.mute) { try { od.call(ent.node, ent.ctx.destination); } catch (e) {} }
   }
-  // YouTube：<video> 接进我们自己的 AudioContext（同一个 <video> 只能接一次，之后声音一直走这里，不转写时直通扬声器）
+  // YouTube / Vimeo：<video> 接进我们自己的 AudioContext（同一个 <video> 只能接一次，之后声音一直走这里，不转写时直通扬声器）
   let ya = null; // { ctx, src, el, vol }
   function ytSource() {
-    const v = vEl();
+    const v = YT ? vEl() : vmVideo();
     if (!v) return null;
     if (!ya || ya.el !== v) {
-      const ctx = new AudioContext();
-      ya = { ctx, el: v, src: ctx.createMediaElementSource(v), vol: null };
-      oc.call(ya.src, ctx.destination);
+      const ps = pageSrc.get(v);
+      if (ps && ps.context.state !== 'closed') ya = { ctx: ps.context, el: v, src: ps, vol: null, page: true }; // 页面已经接过：借它的
+      else {
+        const ctx = new AudioContext();
+        ctx.__bnOwn = 1;
+        ya = { ctx, el: v, src: ctx.createMediaElementSource(v), vol: null };
+        oc.call(ya.src, ctx.destination);
+      }
     }
     if (ya.ctx.state !== 'running') ya.ctx.resume().catch(() => {});
     return ya;
   }
   function resetAcc() { accN = 0; frac = 0; sum = 0; sumN = 0; lastVt = null; }
+  // 浏览器的自动播放规则：没被点过的标签页里 AudioContext 是挂起的（一包声音都不来），有声播放也会被拒绝；
+  // 「按页批量」自己开的标签页就是这样。挂起着就算 locked，面板会提示用户点一下页面；
+  // 点了（或按了键）之后这里把 AudioContext 恢复、接着播 —— 不恢复的话视频显示在播、进度却不走
+  const locked = () => !!(VID && tap.on && ya && ya.ctx.state !== 'running');
+  function wake(e) {
+    if (!e.isTrusted || !locked()) return;
+    ya.ctx.resume().then(() => {
+      resetAcc();
+      // 点在画面上播放器自己会切换播放 / 暂停：等它处理完，还停着再播
+      nST.call(window, () => { const p = P(); if (tap.on && p && p.paused) p.play(); }, 400);
+    }).catch(() => {});
+  }
+  for (const type of ['pointerdown', 'keydown']) window.addEventListener(type, wake, true);
   function tapOn(mute) {
     if (tap.on) tapOff();
     tap.on = true; tap.mute = mute !== false;
     resetAcc();
-    if (YT) {
+    if (VID) {
       let a;
       try { a = ytSource(); } catch (e) { tap.on = false; return { ok: false, detail: String(e.message || e) }; }
       if (!a) { tap.on = false; return { ok: false }; }
       oc.call(a.src, spFor(a.ctx));
       if (tap.mute) {
-        try { od.call(a.src, a.ctx.destination); } catch (e) {}
+        if (a.page) { for (const e of outs) if (e.ctx === a.ctx) { try { od.call(e.node, a.ctx.destination); } catch (err) {} } } // 页面的声音链：断开接扬声器的末端
+        else { try { od.call(a.src, a.ctx.destination); } catch (e) {} }
         // 不出声时把播放器音量开满（声音反正不进扬声器），转写拿到的声音才不会太小；停了再还原
-        const m = mp();
+        const m = YT && mp();
         if (m && m.getVolume) { a.vol = { v: m.getVolume(), muted: m.isMuted() }; m.unMute(); m.setVolume(100); }
+        else if (!YT) { a.vol = { v: a.el.volume, muted: a.el.muted }; a.el.muted = false; a.el.volume = 1; }
       }
       return { ok: true, outs: 1 };
     }
@@ -172,13 +252,15 @@
   function tapOff() {
     if (!tap.on) return;
     tap.on = false;
-    if (YT && ya) {
+    if (VID && ya) {
       const sp = tap.sps.get(ya.ctx);
       if (sp) { try { od.call(ya.src, sp); } catch (e) {} }
       if (tap.mute) {
-        try { oc.call(ya.src, ya.ctx.destination); } catch (e) {}
-        const m = mp();
+        if (ya.page) { for (const e of outs) if (e.ctx === ya.ctx) { try { oc.call(e.node, ya.ctx.destination); } catch (err) {} } }
+        else { try { oc.call(ya.src, ya.ctx.destination); } catch (e) {} }
+        const m = YT && mp();
         if (m && ya.vol) { m.setVolume(ya.vol.v); if (ya.vol.muted) m.mute(); ya.vol = null; }
+        else if (!YT && ya.vol) { ya.el.volume = ya.vol.v; ya.el.muted = ya.vol.muted; ya.vol = null; }
       }
     } else {
       for (const e of outs) {
@@ -269,6 +351,24 @@
       const text = e.segs.map(s => s.utf8 || '').join('').replace(/\s+/g, ' ').trim();
       if (text) raw.push({ from: e.tStartMs / 1000, to: (e.tStartMs + (e.dDurationMs || 0)) / 1000, text });
     }
+    return mergeLines(raw);
+  }
+  // WebVTT（Vimeo 的字幕格式）：时间行「00:00:01.000 --> 00:00:04.000」，下面到空行为止是文字
+  function parseVtt(text) {
+    const raw = [], sec = s => { const p = s.trim().split(':').map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1]; };
+    const lines = String(text).replace(/\r/g, '').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^\s*([\d:.]+)\s*-->\s*([\d:.]+)/);
+      if (!m) continue;
+      const buf = [];
+      while (i + 1 < lines.length && lines[i + 1].trim()) buf.push(lines[++i]);
+      const t = buf.join(' ').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+      if (t) raw.push({ from: sec(m[1]), to: sec(m[2]), text: t });
+    }
+    // 自动字幕常常一行是上一行的延续（滚动显示）：和上一条完全重复的去掉
+    return mergeLines(raw.filter((x, i) => !i || x.text !== raw[i - 1].text));
+  }
+  function mergeLines(raw) {
     for (let i = 0; i < raw.length - 1; i++) if (raw[i].to > raw[i + 1].from) raw[i].to = Math.max(raw[i].from, raw[i + 1].from);
     // 自动字幕一行只有几个词：拼成一句一句（不超过 10 秒）
     const o = [];
@@ -320,6 +420,28 @@
     return { ok: true, vid, lines, lang: pick.languageCode, asr: pick.kind === 'asr', name: trackName(pick) };
   }
 
+  // —— Vimeo 字幕：播放器在页面上放了 <track>，src 是 captions.vimeo.com 上带签名的 VTT，可以直接下载 ——
+  function vmTracks() {
+    return [...document.querySelectorAll('track')].filter(t => t.src && /^(captions|subtitles)$/i.test(t.kind || 'captions'));
+  }
+  async function vmSubs() {
+    const id = vmId();
+    if (!id || !vmVideo()) return { ok: false, detail: '播放器还没准备好' };
+    let ts = vmTracks();
+    for (let i = 0; i < 12 && !ts.length; i++) { await sleep(250); ts = vmTracks(); }
+    if (!ts.length) return { ok: false, none: true, detail: '这个视频没有字幕' };
+    // 人工字幕优先；自动字幕的语言标成 xx-x-autogen、名字带 auto-generated
+    const auto = t => /autogen|auto-generated|自动/i.test((t.srclang || '') + ' ' + (t.label || ''));
+    const pick = ts.find(t => !auto(t)) || ts[0];
+    const res = await fetch(pick.src);
+    const text = await res.text();
+    if (!res.ok || !text) return { ok: false, detail: `字幕下载失败（HTTP ${res.status}）` };
+    const lines = parseVtt(text);
+    if (!lines.length) return { ok: false, detail: '字幕是空的' };
+    const lang = String(pick.srclang || '').replace(/-x-autogen$/i, '') || 'und';
+    return { ok: true, vid: id, lines, lang, asr: auto(pick), name: pick.label || lang };
+  }
+
   // —— 插件发来的命令 ——
   window.addEventListener('message', async e => {
     const m = e.data;
@@ -335,9 +457,12 @@
         case 'rate': if (p) p.playbackRate = +m.v || 1; r = { ok: !!p }; break;
         case 'tap': r = m.on ? tapOn(m.mute) : (tapOff(), { ok: true }); break;
         case 'bg': r = { ok: setBg(!!m.on), intervals: ivs.size }; break;
-        case 'subs': r = YT ? await ytSubs() : { ok: false, none: true }; break;
+        case 'subs': r = YT ? await ytSubs() : VM ? await vmSubs() : { ok: false, none: true }; break;
         // 批量：静音（返回原来是不是静音的）、在播放列表里换到某个视频（站内切换，不重新加载页面，后台也能走）
-        case 'ytmute': { const y = mp(); if (!y || !y.isMuted) { r = { ok: false }; break; } const was = y.isMuted(); if (m.on) y.mute(); else y.unMute(); r = { ok: true, was }; break; }
+        case 'ytmute': {
+          if (GEN) { const v = vmVideo(); if (!v) { r = { ok: false }; break; } const was = v.muted; v.muted = !!m.on; r = { ok: true, was }; break; }
+          const y = mp(); if (!y || !y.isMuted) { r = { ok: false }; break; } const was = y.isMuted(); if (m.on) y.mute(); else y.unMute(); r = { ok: true, was }; break;
+        }
         // 插件那一半的等待也借这里的计时器：后台标签页里插件自己的定时器会被限到一分钟一次，这里转写 / 批量时走 Worker 不受限
         case 'sleep': await sleep(Math.min(60000, Math.max(0, +m.ms || 0))); r = { ok: true }; break;
         case 'quality': { const y = mp(); try { if (y && y.setPlaybackQualityRange) y.setPlaybackQualityRange('hd1080', 'hd1080'); } catch (e) {} r = { ok: true }; break; } // 截图要清楚

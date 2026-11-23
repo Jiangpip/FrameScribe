@@ -39,6 +39,15 @@ class Store {
     this._write(path.join(d, 'marks.json'), rec.marks);
   }
 
+  // 资料库对照表（library.json）：{ courses: { <播放列表名>: { cat, name } }, indexFiles: { <播放列表名>: 总目录文件路径 } }
+  library() {
+    if (!this.lib) this.lib = this._read(path.join(this.root, 'library.json'), {});
+    this.lib.courses = this.lib.courses || {};
+    this.lib.indexFiles = this.lib.indexFiles || {};
+    return this.lib;
+  }
+  saveLibrary() { this._write(path.join(this.root, 'library.json'), this.library()); }
+
   sessions() {
     const out = [];
     for (const name of fs.readdirSync(this.sdir)) {

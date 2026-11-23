@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>FrameScribe</title>
+<style>
+  :root { --bg: #0d0f13; --panel: #14171d; --line: #262b35; --text: #e8ecf2; --dim: #8d96a5; --accent: #ff7a2f; --accent2: #5fd3c6; }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 400px; background: var(--bg); color: var(--text); font: 13px/1.6 "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 700; }
+  header .dot { width: 9px; height: 9px; border-radius: 3px; background: var(--accent); }
+  header .sp { flex: 1; }
+  main { padding: 10px 14px 14px; }
+  button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.pri { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 700; }
+  button:disabled { opacity: .5; cursor: default; }
+  button { white-space: nowrap; }
+  #hint { font-size: 12px; line-height: 1.4; }
+  .dim { color: var(--dim); }
+  .list { max-height: 300px; overflow: auto; margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; }
+  .it { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .it:last-child { border-bottom: 0; }
+  .it input { margin-top: 3px; }
+  .it .n { font: 12px Consolas, monospace; color: var(--accent); min-width: 18px; margin-top: 1px; }
+  .it .t { flex: 1; word-break: break-word; }
+  .it .s { font-size: 11px; color: var(--accent2); }
+  .it a { color: var(--accent2); font-size: 12px; white-space: nowrap; text-decoration: none; }
+  label.blk { display: block; margin: 8px 0 4px; color: var(--dim); }
+  input[type=text] { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; outline: none; }
+  input[type=text]:focus { border-color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  .row .sp { flex: 1; }
+  .run { background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<header><span class="dot"></span>FrameScribe <span class="sp"></span><button id="nb" title="插件自己的笔记本（软件没开时用）">笔记本</button></header>
+<main id="main"><p class="dim">正在找这一页里的视频…</p></main>
+<script src="popup.js"></script>
+</body>
+</html>

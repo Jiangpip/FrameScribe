@@ -1,7 +1,7 @@
 {
   "name": "framescribe",
   "productName": "FrameScribe",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "description": "FrameScribe：看视频时截图记笔记、转写、生成带时间的大纲",
   "license": "PolyForm-Noncommercial-1.0.0",

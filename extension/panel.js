@@ -8,8 +8,17 @@
   if (window.top !== window) return;
   const TAG = 'bn-polyv';
   const YT = /(^|\.)youtube\.com$/.test(location.hostname);
+  const VM = /(^|\.)vimeo\.com$/.test(location.hostname);
+  // B 站视频页：截图（Alt+S、插件自己的截图）仍由 content.js 管；这里只做大纲面板，记录和截图共用一条（BV号_p1）
+  const BL = /(^|\.)bilibili\.com$/.test(location.hostname);
+  const VID = YT || VM || BL; // 普通 <video> 播放器，能取字幕
+  const SITE_NAME = YT ? 'YouTube' : VM ? 'Vimeo' : BL ? 'B 站' : '保利威回放';
+  const blKey = () => { if (!BL || !globalThis.BN_biliPage) return null; try { return BN_biliPage.pageKey(); } catch (e) { return null; } };
   const ytId = () => YT && location.pathname === '/watch' ? (new URL(location.href).searchParams.get('v') || '') : '';
-  const onVideo = () => !YT || !!ytId(); // YouTube 是单页应用：首页、搜索页也会跑这个脚本，只在视频页显示
+  const vmId = () => VM ? ((location.pathname.match(/^\/(?:video\/)?(\d{5,})(?:\/|$)/) || [])[1] || '') : '';
+  const curVid = () => YT ? ytId() : VM ? vmId() : BL ? ((blKey() || {}).id || '') : '';
+  const curSid = () => !curVid() ? '' : YT ? 'yt_' + ytId() : VM ? 'vm_' + vmId() : curVid();
+  const onVideo = () => !VID || !!curVid(); // YouTube / Vimeo 是单页应用：首页、搜索页也会跑这个脚本，只在视频页显示
   const KEY_GAP = 15, KEY_DIFF = 6, KEY_MAX = 600; // 转写时顺手存画面：视频里至少隔 15 秒、画面明显变了才存，一节课最多 600 张
 
   // —— 和页面里的播放器说话 ——
@@ -43,11 +52,14 @@
     return port;
   }
   const tell = msg => { const p = connect(); if (p) try { p.postMessage({ msg }); } catch (e) {} };
+  // 截图清晰度跟软件设置走（lec-get / lec-start 的回复里带着），没连上软件时用「原画」
+  let shotCfg = { w: 3840, q: 0.92 };
+  const noteShot = r => { if (r && r.shot && r.shot.w) shotCfg = r.shot; return r; };
   const ask = (msg, ms = 20000) => new Promise(resolve => {
     const p = connect();
     if (!p) return resolve({ ok: false, detail: '插件被重新加载过，请刷新这个页面' });
     const id = ++pseq;
-    pwait.set(id, resolve);
+    pwait.set(id, r => resolve(noteShot(r)));
     try { p.postMessage({ ask: true, id, ms, msg }); } catch (e) { pwait.delete(id); resolve(null); }
     setTimeout(() => { if (pwait.delete(id)) resolve(null); }, ms + 1000);
   });
@@ -70,7 +82,35 @@
     }
     return null;
   }
+  // B 站：视频信息要问接口（content.js 的 sessionMeta），问到就缓存；字幕也先问一次，决定按钮是「取字幕」还是「开始转写」
+  const blMeta = new Map(), blCaps = new Map(); // 记录 id → 视频信息 / 字幕结果 { status, body, lan, lanDoc, detail }
+  async function blLoad() {
+    const k = blKey();
+    if (!k) return;
+    if (!blMeta.has(k.id)) { try { blMeta.set(k.id, await BN_biliPage.sessionMeta(k)); } catch (e) { return; } }
+    const m = blMeta.get(k.id);
+    if (!blCaps.has(k.id) && m && m.aid && m.cid) {
+      let r;
+      try { r = await BN_bili.subtitles(m.aid, m.cid); } catch (e) { r = { status: 'error', detail: String(e.message || e) }; }
+      if (r.status !== 'error') blCaps.set(k.id, r); // 网络出错下次再问
+    }
+  }
+  async function blSubs() {
+    const k = blKey();
+    if (!k) return { ok: false, detail: '认不出这个页面的视频编号' };
+    blCaps.delete(k.id);
+    await blLoad();
+    const c = blCaps.get(k.id);
+    if (!c) return { ok: false, detail: '字幕接口没回应，过一会儿再试' };
+    if (c.status !== 'ok') return { ok: false, none: c.status === 'none', detail: c.detail };
+    return { ok: true, vid: k.id, lines: c.body, lang: c.lan, asr: /^ai-/.test(c.lan || ''), name: c.lanDoc || c.lan };
+  }
   function meta(st) {
+    if (BL) {
+      const k = blKey(), c = k && blMeta.get(k.id);
+      const m = c || { id: k ? k.id : '', bvid: k ? k.bvid : '', p: k ? k.p : 1, title: document.title.replace(/_哔哩哔哩_bilibili$/, '').trim() || 'B 站视频', url: location.href.split('#')[0] };
+      return { ...m, kind: 'bili', siteName: 'B 站', duration: m.duration || (st && st.dur ? Math.round(st.dur) : 0) };
+    }
     if (YT) {
       const v = ytId(), i = st && st.info && st.info.id === v ? st.info : null; // 换视频的一瞬间播放器里可能还是上一个
       return {
@@ -78,6 +118,15 @@
         title: (i && i.title) || document.title.replace(/^\(\d+\)\s*/, '').replace(/\s*-\s*YouTube$/, '').trim() || 'YouTube 视频',
         part: (i && i.date) || '', owner: (i && i.author) || '', url: 'https://www.youtube.com/watch?v=' + v,
         duration: st && st.dur && !st.ad ? Math.round(st.dur) : (i ? i.len : 0)
+      };
+    }
+    if (VM) {
+      const v = vmId(), i = st && st.info && st.info.id === v ? st.info : null;
+      return {
+        id: 'vm_' + v, kind: 'web', site: 'vimeo', siteName: 'Vimeo',
+        title: (i && i.title) || document.title.replace(/\s*(\|[^|]*)?\s*on Vimeo$/i, '').trim() || 'Vimeo 视频',
+        part: (i && i.date) || '', owner: (i && i.author) || '', url: 'https://vimeo.com/' + v,
+        duration: st && st.dur ? Math.round(st.dur) : (i ? i.len : 0)
       };
     }
     const u = new URL(location.href), vid = u.searchParams.get('playBackVid') || u.searchParams.get('vid') || '';
@@ -132,7 +181,9 @@
 
   async function refresh() {
     st = await main('state');
+    if (BL) await blLoad();
     const m = meta(st);
+    if (BL && !m.id) { render(); return; } // 番剧页还在查这一集的编号
     if (m.id !== sid) { sid = m.id; data = null; }
     const r = await ask({ type: 'lec-get', sid }, 8000);
     appOk = !!(r && r.ok);
@@ -143,15 +194,15 @@
   // —— 转写 ——
   // YouTube 有字幕：直接取字幕全文交给软件（几秒），不用把视频放一遍
   let capsFailed = ''; // 取字幕失败过的视频：再点就改成听声音转写
-  const hasCaps = () => YT && st && st.info && st.info.id === ytId() && st.info.caps > 0 && capsFailed !== ytId();
+  const hasCaps = () => BL ? !!(blCaps.get(curVid()) && blCaps.get(curVid()).status === 'ok' && capsFailed !== curVid()) : VID && st && st.info && st.info.id === curVid() && st.info.caps > 0 && capsFailed !== curVid();
   async function takeSubs() {
     if (st && st.ad) return flash('正在放广告，广告放完再点');
     const m = meta(st);
-    flash('正在取 YouTube 字幕…', 20000);
-    const r = await main('subs', {}, 25000);
+    flash('正在取 ' + SITE_NAME + ' 字幕…', 20000);
+    const r = BL ? await blSubs() : await main('subs', {}, 25000);
     if (!r || !r.ok) return { ok: false, detail: (r && r.detail) || '页面没回应，刷新一下再试' };
-    if (r.vid !== ytId()) return { ok: false, detail: '视频换了，再点一次' };
-    const a = await ask({ type: 'lec-subs', session: m, body: r.lines, lan: r.lang, lanDoc: `YouTube ${r.asr ? '自动字幕' : '字幕'} · ${r.name}` }, 20000);
+    if (r.vid !== curVid()) return { ok: false, detail: '视频换了，再点一次' };
+    const a = await ask({ type: 'lec-subs', session: m, body: r.lines, lan: r.lang, lanDoc: `${SITE_NAME} ${r.asr ? '自动字幕' : '字幕'} · ${r.name}` }, 20000);
     if (!a || !a.ok) return { ok: false, detail: (a && a.detail) || '没连上 FrameScribe 软件，先打开软件' };
     sid = m.id;
     await refresh();
@@ -176,7 +227,7 @@
       const r = await takeSubs();
       if (!r || r.ok) return;
       flash('取字幕失败：' + r.detail + '。再点一次「开始转写」会改成听声音转写', 8000);
-      capsFailed = ytId();
+      capsFailed = curVid();
       return;
     }
     const m = meta(st);
@@ -202,6 +253,7 @@
     if (!run) return;
     const r0 = run;
     run = null;
+    showNeed(false);
     await main('tap', { on: false });
     await main('bg', { on: false });
     await main('rate', { v: 1 });
@@ -218,7 +270,7 @@
     run.segStart = null;
   }
   async function onAudio(m) {
-    if (!run || (YT && 'yt_' + ytId() !== sid)) return; // YouTube 换了视频：新视频的声音别记到旧记录里（tick 会停掉转写）
+    if (!run || (VID && curSid() !== sid)) return; // YouTube / Vimeo 换了视频：新视频的声音别记到旧记录里（tick 会停掉转写）
     const vt = m.vt / 1000, rate = +m.rate || 1;
     if (vt > run.last + 0.01 || run.segStart == null) run.lastAudio = Date.now(); // 进度在走才算（卡住时也可能送来全是静音的包）
     if (run.segStart == null) run.segStart = Math.max(0, vt - 0.5 * rate);
@@ -257,7 +309,9 @@
   const sc = document.createElement('canvas'); sc.width = 32; sc.height = 18;
   const sctx = sc.getContext('2d', { willReadFrequently: true });
   const cv = document.createElement('canvas'), cctx = cv.getContext('2d');
-  const screenEl = () => YT ? document.querySelector('#movie_player video') : document.querySelector('canvas.plv__screen--canvas') || [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0] || null;
+  const vmVideo = () => [...document.querySelectorAll('video')].filter(v => isFinite(v.duration) && v.duration > 0).sort((a, b) => b.videoWidth * b.videoHeight - a.videoWidth * a.videoHeight)[0] || null;
+  const blVideo = () => document.querySelector('#bilibili-player video, .bpx-player-container video, .bpx-player-video-wrap video') || vmVideo();
+  const screenEl = () => YT ? document.querySelector('#movie_player video') : VM ? vmVideo() : BL ? blVideo() : document.querySelector('canvas.plv__screen--canvas') || [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0] || null;
   function sig(c) {
     sctx.drawImage(c, 0, 0, 32, 18);
     const d = sctx.getImageData(0, 0, 32, 18).data, g = new Uint8Array(576);
@@ -282,24 +336,25 @@
       if (bright(g) < 8) return; // 黑场
       if (run.lastKeySig && diff(g, run.lastKeySig) < KEY_DIFF) return;
       run.lastKeySig = g; run.lastKeyT = vt; run.keys++;
-      tell({ type: 'lec-frame', sid, t: vt, b64: shot(c, 960, 0.75).split(',')[1] });
+      tell({ type: 'lec-frame', sid, t: vt, b64: shot(c, shotCfg.w, shotCfg.q).split(',')[1] });
     } catch (e) { run.keys = KEY_MAX; } // 画面取不到就不再试
   }
 
   // —— 软件来要截图（Alt+S 等） ——
-  async function appCapture() {
+  async function appCapture(msg) {
     const s = await main('state');
     if (!s || !s.ready || !onVideo()) return { ok: false, reason: '播放器还没准备好' };
     const c = screenEl();
     if (!c) return { ok: false, reason: '没找到播放器画面' };
     let url;
-    try { url = shot(c, 1920, 0.9); } catch (e) { return { ok: false, reason: '画面取不到：' + e.message }; }
+    try { url = shot(c, msg && msg.shot && msg.shot.w || 1920, msg && msg.shot && msg.shot.q || 0.9); } catch (e) { return { ok: false, reason: '画面取不到：' + e.message }; }
     const t = s.vt / 1000;
     return { ok: true, session: meta(s), t, frames: [{ t, dataUrl: url, main: true }], chosen: 0 };
   }
   chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-    if (msg.type === 'app-capture') { appCapture().then(reply, e => reply({ ok: false, reason: String(e.message || e) })); return true; }
-    if (msg.type === 'cmd') { flash((YT ? 'YouTube' : '保利威回放') + '页的截图要开着 FrameScribe 软件（插件单独用时只支持 B 站）', 5000); reply({ ok: true }); }
+    if (BL) return; // B 站页的截图由 content.js 回应
+    if (msg.type === 'app-capture') { appCapture(msg).then(reply, e => reply({ ok: false, reason: String(e.message || e) })); return true; }
+    if (msg.type === 'cmd') { flash(SITE_NAME + '页的截图要开着 FrameScribe 软件（插件单独用时只支持 B 站）', 5000); reply({ ok: true }); }
   });
 
   function onPush(m) {
@@ -375,18 +430,24 @@
       .search input { width: 100%; padding: 6px 8px; font-size: 13px; }
       .job { color: #ffb37a; font-size: 12px; margin-top: 6px; }
       .toast { position: fixed; top: 76px; right: 412px; max-width: 360px; z-index: 2147483647; background: #12151bf2; color: #e8ecf2; border: 1px solid #2a303b;
-        border-left: 3px solid #ff7a2f; border-radius: 10px; padding: 10px 12px; font-size: 13px; box-shadow: 0 10px 30px #0008; transition: opacity .2s; }
+        border-left: 3px solid #ff7a2f; border-radius: 10px; padding: 10px 12px; font-size: 13px; box-shadow: 0 10px 30px #0008; transition: opacity .2s; white-space: pre-line; }
       .toast.hide { opacity: 0; pointer-events: none; }
       .panel:not(.on) ~ .toast { right: 16px; }
       .panel.pl .vid-only { display: none !important; }
       .panel:not(.pl) .pl-only { display: none !important; }
       .brow { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: #3cc8d81a; color: #9fe6ee; font-size: 12px; gap: 8px; }
       .brow .bnote { flex: 1; min-width: 0; }
+      .need { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 2147483647; width: 520px; max-width: calc(100vw - 32px); background: #ff7a2f; color: #111;
+        border-radius: 10px; padding: 12px 18px; box-shadow: 0 12px 36px #000a; cursor: pointer; animation: need 1.4s ease-in-out infinite; }
+      .need.hide { display: none; }
+      .need b { display: block; font-size: 17px; }
+      .need span { display: block; font-size: 13px; line-height: 1.6; margin-top: 2px; }
+      @keyframes need { 50% { box-shadow: 0 12px 36px #000a, 0 0 0 7px #ff7a2f66; } }
     </style>
     <div class="fab">📒 <b>大纲</b></div>
     <div class="panel">
       <div class="hd">
-        <div class="row"><span class="tag">${YT ? 'VIDEO' : 'COURSE'}</span><span class="ttl"></span><button class="x" title="收起">×</button></div>
+        <div class="row"><span class="tag">${VID ? 'VIDEO' : 'COURSE'}</span><span class="ttl"></span><button class="x" title="收起">×</button></div>
         <div class="sub st"></div>
         <div class="bar vid-only" title="青色 = 已经转写的部分，橙线 = 现在播放的位置；点一下跳过去"></div>
         <div class="row pl-only" style="margin-top:8px">
@@ -404,17 +465,19 @@
           <label>倍速 <select class="rate"><option value="1">1</option><option value="1.25">1.25</option><option value="1.5" selected>1.5</option><option value="2">2</option></select></label>
           <label title="转写时不出声，你可以去看别的"><input type="checkbox" class="mute" checked>不出声</label>
           <label class="vid-only" title="整节转完自动交给 AI 生成大纲"><input type="checkbox" class="auto" checked>转完自动生成大纲</label>
-          <label title="YouTube 取字幕时按间隔跳着截图（每个视频多约 1 分钟），大纲每章配一张"><input type="checkbox" class="shots" checked>配截图</label>
+          <label title="取字幕时按间隔跳着截图（每个视频多约 1 分钟），大纲每章配一张"><input type="checkbox" class="shots" checked>配截图</label>
         </div>
         <div class="job vid-only"></div>
         <div class="row brow" style="display:none"><span class="bnote"></span><button class="b bstop2">停止批量</button></div>
       </div>
       <div class="tabs vid-only"><span data-t="outline" class="on">大纲</span><span data-t="search">搜索文字</span></div>
-      <div class="search" style="display:none"><input type="text" placeholder="${YT ? '搜字幕 / 转写的文字，比如：Niagara、material' : '搜转写的文字，比如：材质、HDA、粗糙度'}"></div>
+      <div class="search" style="display:none"><input type="text" placeholder="${VID ? '搜字幕 / 转写的文字，比如：Niagara、material' : '搜转写的文字，比如：材质、HDA、粗糙度'}"></div>
       <div class="body"></div>
     </div>
-    <div class="toast hide"></div>`;
+    <div class="toast hide"></div>
+    <div class="need hide"><b>👆 在这个页面上点一下，转写才能开始</b><span></span></div>`;
     const q = s => root.querySelector(s);
+    ui.need = q('.need');
     Object.assign(ui, { fab: q('.fab'), panel: q('.panel'), ttl: q('.ttl'), st: q('.st'), bar: q('.bar'), go: q('.go'), mk: q('.mk'), nb: q('.nb'),
       rate: q('.rate'), mute: q('.mute'), auto: q('.auto'), shots: q('.shots'), job: q('.job'), body: q('.body'), search: q('.search'), input: q('.search input'), toast: q('.toast'),
       bgo: q('.bgo'), bstop: q('.bstop'), brow: q('.brow'), bnote: q('.bnote') });
@@ -425,6 +488,7 @@
     const saveOpts = () => { try { localStorage.setItem('bn-polyv-opts', JSON.stringify({ rate: ui.rate.value, mute: ui.mute.checked, auto: ui.auto.checked, shots: ui.shots.checked })); } catch (e) {} };
     ui.rate.onchange = () => { saveOpts(); if (run) { run.rate = +ui.rate.value; main('rate', { v: run.rate }); } };
     ui.mute.onchange = saveOpts; ui.auto.onchange = saveOpts; ui.shots.onchange = saveOpts;
+    if (BL) ui.fab.style.bottom = '58px'; // B 站页右下角已经有截图计数的小条（content.js），放它上面
     ui.fab.onclick = () => toggle(true);
     q('.x').onclick = () => toggle(false);
     ui.go.onclick = () => run ? stopRun('已停止转写，下次从没转的地方接着转') : startRun();
@@ -463,6 +527,31 @@
     flashTimer = setTimeout(() => ui.toast.classList.add('hide'), ms);
   }
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // 浏览器拦了自动播放（没被点过的标签页不让出声播放，取声音的通道也是停着的；「按页批量」自己开的标签页就是这样）：
+  // 页面顶上挂一条醒目的提示，标签页标题前也加个记号，直到用户点一下页面（page-main.js 的 wake 接手恢复）
+  const NEED_MARK = '👆 点一下 · ';
+  let needOn = false;
+  function showNeed(on) {
+    if (on === needOn && !on) return;
+    needOn = on;
+    if (!root) { if (!on) return; build(); }
+    ui.need.classList.toggle('hide', !on);
+    if (on) {
+      ui.need.lastElementChild.textContent = `浏览器不让没点过的标签页自己播放。点页面上任意位置（点这条也行）就开始${run && run.mute ? '，不会出声' : ''}。`;
+      if (!document.title.startsWith(NEED_MARK)) document.title = NEED_MARK + document.title;
+    } else if (document.title.startsWith(NEED_MARK)) document.title = document.title.slice(NEED_MARK.length);
+  }
+  const lockedFor = () => run && run.lockedAt ? Date.now() - run.lockedAt : 0;
+  // s = 播放器刚报的状态。记下从什么时候开始被拦的（超过 1.5 秒才提示：刚开始那一下 AudioContext 还在启动）；放开后看门狗重新计时
+  function trackLock(s) {
+    const locked = !!(run && s && s.locked);
+    if (run && s) {
+      if (locked) { if (!run.lockedAt) run.lockedAt = Date.now(); }
+      else if (run.lockedAt) { run.lockedMs = (run.lockedMs || 0) + Date.now() - run.lockedAt; run.lockedAt = 0; run.lastAudio = run.nudged = Date.now(); }
+    }
+    showNeed(lockedFor() > 1500);
+    return locked;
+  }
 
   function render() {
     if (!root) return;
@@ -499,9 +588,12 @@
     else if (st && st.ad) ui.st.textContent = '正在放广告，等正片开始';
     else if (!dur) ui.st.textContent = '播放器还没准备好：先点一下播放';
     else if (!run && data && data.session && data.session.subs && data.session.subs.lan !== 'asr' && n) ui.st.textContent = `已取字幕：${data.session.subs.lanDoc || data.session.subs.lan} · ${n} 句`;
+    else if (lockedFor() > 1500) ui.st.textContent = `⚠ 还没开始：浏览器拦了自动播放，在这个页面上点一下 · 已转写 ${Math.min(100, Math.round(done / dur * 100))}% · ${n} 句`;
     else ui.st.textContent = `${run ? `● 转写中 ${run.rate} 倍速 · ` : ''}已转写 ${Math.min(100, Math.round(done / dur * 100))}%（${fmt(done)} / ${fmt(dur)}）· ${n} 句`;
     ui.bar.innerHTML = dur ? cov.map(r => `<i style="left:${r[0] / dur * 100}%;width:${(r[1] - r[0]) / dur * 100}%"></i>`).join('') + (st ? `<u style="left:${Math.min(100, st.vt / 10 / dur)}%"></u>` : '') : '';
   }
+  // B 站没取到字幕的原因（没登录 / 没有字幕），写在「开始转写」的说明前面
+  const blNoCaps = () => { const c = BL && blCaps.get(curVid()); return !c || c.status === 'ok' ? '' : c.status === 'need_login' ? '没登录 B 站，取不到字幕（AI 字幕要登录）。登录后刷新页面就能直接「取字幕」；不登录也可以转写。<br><br>' : '这个视频没有字幕（也没有 AI 字幕）。<br><br>'; };
   function renderBody() {
     if (!root || !open || onPlaylist()) return;
     const b = ui.body;
@@ -509,7 +601,7 @@
       const o = data && data.outline;
       if (!o) {
         const n = data && data.body ? data.body.length : 0;
-        b.innerHTML = !n && hasCaps() ? '<div class="empty">这个视频有字幕。<br>点「取字幕」：几秒就拿到全文，不用把视频放一遍；取完自动生成大纲，之后点大纲里的任何一条就能跳过去。</div>' : `<div class="empty">${n ? `已经有 ${n} 句文字。点「生成大纲」让 AI 按这些文字出一份带时间的目录（转了一部分也能先生成）。` : '还没有转写。<br>点「开始转写」：插件会从头按倍速把这节课放一遍、在本机转成文字（默认不出声，可以切到别的标签页干别的）。<br>转完自动生成大纲，之后点大纲里的任何一条就能跳过去。'}</div>`;
+        b.innerHTML = !n && hasCaps() ? '<div class="empty">这个视频有字幕。<br>点「取字幕」：几秒就拿到全文，不用把视频放一遍；取完自动生成大纲，之后点大纲里的任何一条就能跳过去。</div>' : `<div class="empty">${n ? `已经有 ${n} 句文字。点「生成大纲」让 AI 按这些文字出一份带时间的目录（转了一部分也能先生成）。` : blNoCaps() + '还没有转写。<br>点「开始转写」：插件会从头按倍速把这节课放一遍、在本机转成文字（默认不出声，可以切到别的标签页干别的）。<br>转完自动生成大纲，之后点大纲里的任何一条就能跳过去。'}</div>`;
         return;
       }
       const vt = st ? st.vt / 1000 : 0;
@@ -545,13 +637,13 @@
   const bupdate = async fn => { const b = (await bget()) || { running: false, lists: [], cur: 0 }; fn(b); await bset(b); return b; };
   const myToken = () => { try { let t = sessionStorage.getItem('bn-batch-owner'); if (!t) { t = Math.random().toString(36).slice(2); sessionStorage.setItem('bn-batch-owner', t); } return t; } catch (e) { return 'x'; } };
   const groupName = L => (L.channel ? L.channel + ' - ' : '') + L.title;
-  const sleep = ms => YT ? main('sleep', { ms }, ms + 60000).then(r => r || new Promise(res => setTimeout(res, 50))) : new Promise(r => setTimeout(r, ms));
+  const sleep = ms => VID ? main('sleep', { ms }, ms + 60000).then(r => r || new Promise(res => setTimeout(res, 50))) : new Promise(r => setTimeout(r, ms));
   const shotsOn = () => !ui.shots || ui.shots.checked;
 
   // YouTube 配截图：取字幕不用放视频，所以按间隔跳着截（最多约 30 张，画面没变的不要），大纲每章配一张
   // 在后台标签页里也能截（实测 1080p、每跳一次 2–4 秒）；note(进度文字)，stop() 返回 true 就停
   async function grabFrames(id, dur, note, stop) {
-    const V = () => document.querySelector('#movie_player video');
+    const V = () => screenEl();
     if (!V() || !dur) return 0;
     await main('quality');
     await main('pause');
@@ -585,7 +677,7 @@
         const g = sig(e);
         if (bright(g) < 8 || (last && diff(g, last) < KEY_DIFF)) continue; // 黑场、和上一张差不多
         last = g; n++;
-        tell({ type: 'lec-frame', sid: id, t: +e.currentTime.toFixed(2), b64: shot(e, 1280, 0.82).split(',')[1] });
+        tell({ type: 'lec-frame', sid: id, t: +e.currentTime.toFixed(2), b64: shot(e, shotCfg.w, shotCfg.q).split(',')[1] });
       } catch (err) { break; }
     }
     await ask({ type: 'lec-keys-done', sid: id }, 20000); // 大纲已经生成了的话，软件重写大纲.md 把图配上
@@ -713,7 +805,7 @@
     const L1 = L.channel ? L : { ...L, channel: s.info.author || '' };
     if (!L.channel && s.info.author) await bupdate(x => { const l = x.lists.find(y => y.id === L.id); if (l && !l.channel) l.channel = s.info.author; });
     const m = { ...meta(s), group: groupName(L1), groupIdx: it.idx };
-    const a = await ask({ type: 'lec-subs', session: m, body: r.lines, lan: r.lang, lanDoc: `YouTube ${r.asr ? '自动字幕' : '字幕'} · ${r.name}` }, 20000);
+    const a = await ask({ type: 'lec-subs', session: m, body: r.lines, lan: r.lang, lanDoc: `${SITE_NAME} ${r.asr ? '自动字幕' : '字幕'} · ${r.name}` }, 20000);
     if (!a || !a.ok) { await setItem(L, it.v, 'fail', (a && a.detail) || '交给软件失败'); return batchNext(L); }
     await ask({ type: 'lec-outline', sid: m.id });
     }
@@ -752,6 +844,120 @@
     const all = (b ? b.lists : []).flatMap(l => l.items), n = s => all.filter(x => x.st === s).length;
     await stopBatch(`批量做完了：取到 ${n('ok')} 个，以前就有 ${n('had')} 个，没字幕 ${n('nocaps')} 个，失败 ${n('fail')} 个。大纲在软件里排队生成，生成完自动更新总目录`);
   }
+  // —— 按页批量（插件图标弹窗发起）：后台记着批量标签页和做到第几个；这个标签页每打开一个视频，就自动处理它 ——
+  // 有字幕取字幕；没字幕就静音倍速转写；交给软件出大纲（同一门课写进一份总目录）；配截图；做完告诉后台跳下一个
+  let lbBusy = false;
+  async function lbTick() {
+    if (lbBusy || !VID || BL || !curVid()) return; // 按页批量只收 YouTube / Vimeo
+    lbBusy = true;
+    try {
+      const r = await send({ type: 'lb-mine' });
+      const job = r && r.job;
+      if (!job || job.item.key !== curSid()) return;
+      let res;
+      try { res = await lbOne(job); } catch (e) { res = { ok: false, detail: String(e && e.message || e) }; }
+      if (res && res.skip) return;
+      await main('bg', { on: false });
+      const d = await send({ type: 'lb-done', key: job.item.key, ok: !!(res && res.ok), st: res && res.st, detail: res && res.detail });
+      if (d && d.finished) {
+        await main('ytmute', { on: false });
+        const n = s => (d.items || []).filter(x => x.st === s).length;
+        bNote = ''; renderBatchNote();
+        const bad = (d.items || []).find(x => x.st === 'fail');
+        flash(`按页批量做完了：新做 ${n('ok')} 个，以前就有 ${n('had')} 个，失败 ${n('fail')} 个。大纲在软件里排队生成，生成完自动写进「${job.group}-总目录」`
+          + (bad ? `\n失败的：${bad.title || bad.key} —— ${bad.detail || '原因不明'}` : ''), bad ? 30000 : 15000);
+      }
+    } finally { lbBusy = false; }
+  }
+  async function lbOne(job) {
+    const { group, item, total } = job, sid0 = item.key;
+    const note = s => { bNote = `按页批量 · ${group} · ${item.idx}/${total} · ${s}`; renderBatchNote(); };
+    if (!root) build();
+    if (!open) toggle(true);
+    await main('ytmute', { on: true });
+    await main('bg', { on: true });
+    let have = await ask({ type: 'lec-get', sid: sid0 }, 8000);
+    for (let i = 0; (!have || !have.ok) && i < 24; i++) { note('没连上 FrameScribe 软件，等它连上…'); await sleep(5000); have = await ask({ type: 'lec-get', sid: sid0 }, 8000); }
+    if (!have || !have.ok) return { ok: false, detail: '没连上 FrameScribe 软件' };
+    // 等视频能用（YouTube 先等片头广告）；打不开、只允许在原网站播放的，两分钟后算失败
+    let t0 = Date.now(), s = null, lastPlay = 0, readyAt = 0;
+    for (;;) {
+      if (curSid() !== sid0) return { skip: true };
+      s = await main('state', {}, 1500);
+      if (s && s.ready && !s.ad && s.info && s.info.id === curVid() && s.dur) {
+        // Vimeo 的作者、发布日期是另外查的（oEmbed），最多再等 5 秒，文件夹名和笔记里才有日期
+        if (!readyAt) readyAt = Date.now();
+        if (!VM || (s.info.author && s.info.date) || Date.now() - readyAt > 5000) break;
+        await sleep(500); continue;
+      }
+      if (s && s.ad) { await main('adskip'); note('等广告放完…'); t0 = Date.now(); }
+      else {
+        note('等视频加载…');
+        if (YT && s && s.paused && Date.now() - lastPlay > 5000) { lastPlay = Date.now(); main('play'); }
+        if (Date.now() - t0 > 120000) return { ok: false, detail: '两分钟还没加载出来（视频打不开，或者只允许在原网站播放）' };
+      }
+      await sleep(1000);
+    }
+    st = s;
+    await refresh();
+    const m = { ...meta(s), group, groupIdx: item.idx };
+    let hadText = !!(have.exists && have.body && have.body.length), gotText = hadText;
+    // 以前只转写了一部分（中途停了、被浏览器拦了）：不算做过，接着转没转的部分；有字幕就改取字幕
+    const subs0 = have.session && have.session.subs;
+    if (hadText && subs0 && subs0.lan === 'asr' && coveredSec() < s.dur - 10) hadText = gotText = false;
+    const needKeys = shotsOn() && !(have.keys > 0);
+    if (hadText) { // 以前做过：记进这门课，缺大纲就补
+      await ask({ type: 'lec-join', sid: sid0, group, idx: item.idx });
+      if (!have.outline) await ask({ type: 'lec-outline', sid: sid0 });
+    } else if (s.info.caps) {
+      note('取字幕…');
+      const r = await main('subs', {}, 25000);
+      if (r && r.ok && r.vid === curVid()) {
+        const a = await ask({ type: 'lec-subs', session: m, body: r.lines, lan: r.lang, lanDoc: `${SITE_NAME} ${r.asr ? '自动字幕' : '字幕'} · ${r.name}` }, 20000);
+        if (!a || !a.ok) return { ok: false, detail: (a && a.detail) || '交给软件失败' };
+        await ask({ type: 'lec-outline', sid: m.id });
+        gotText = true;
+      } else capsFailed = curVid(); // 字幕取不到：下面改成听声音转写
+    }
+    if (!gotText) {
+      note('没有字幕：静音倍速转写…');
+      ui.mute.checked = true; ui.auto.checked = true;
+      await startRun();
+      if (!run) return { ok: false, detail: '转写开始不了（没取到播放器的声音）' };
+      await ask({ type: 'lec-join', sid: m.id, group, idx: item.idx });
+      const t1 = Date.now(), limit = (s.dur / (run.rate || 1)) * 1600 + 300000;
+      // 浏览器拦了自动播放、等用户点一下：后面还有别的视频就只等 3 分钟（先做别的，这个记成失败），只剩这一个就等半小时
+      const lockWait = total - job.done > 1 ? 180000 : 1800000;
+      let lastVt = -1, still = Date.now();
+      while (run) {
+        if (curSid() !== sid0) return { skip: true };
+        const s2 = await main('state', {}, 1500);
+        trackLock(s2); // 这里自己也查一遍：标签页在后台时每秒一次的 tick 会被浏览器降到一分钟一次
+        if (!run) break;
+        if (lockedFor() > 1500) {
+          note('没有字幕，要放一遍转写：在这个页面上点一下才能开始');
+          if (lockedFor() > lockWait) { await stopRun(); return { ok: false, detail: '浏览器拦了自动播放，没人点页面，转写没开始（打开这个视频，在大纲面板里点「开始转写」）' }; }
+          still = Date.now();
+          await sleep(1000);
+          continue;
+        }
+        note(`转写中 ${s.dur ? Math.min(100, Math.round(coveredSec() / s.dur * 100)) : 0}%…`);
+        if (s2 && s2.vt !== lastVt) { lastVt = s2.vt; still = Date.now(); }
+        else if (Date.now() - still > 45000) note('视频没在播放：点一下这个标签页里的视频，会接着转写');
+        if (Date.now() - t1 - (run.lockedMs || 0) > limit) { await stopRun('转写超时'); return { ok: false, detail: '转写超时' }; }
+        await sleep(2000);
+      }
+      if (coveredSec() < s.dur - 10) return { ok: false, detail: '转写没做完' };
+    }
+    if (needKeys) {
+      const n = await grabFrames(sid0, s.dur, x => note(x), async () => curSid() !== sid0);
+      if (curSid() !== sid0) return { skip: true };
+      if (!n) note('这个视频没截到图');
+    }
+    await ask({ type: 'lec-index', group });
+    return { ok: true, st: hadText ? 'had' : 'ok' };
+  }
+
   // 播放列表页的面板内容
   function renderPlaylist() {
     const L = plItems, b = batch;
@@ -779,23 +985,29 @@
       const mode = onPlaylist() ? 'pl:' + new URL(location.href).searchParams.get('list') : 'v';
       if (mode !== lastMode) { lastMode = mode; if (root) { if (open && onPlaylist()) loadPlaylistView(); else render(); } }
       batchTick();
+    } else if ((VM || BL) && host) host.style.display = onVideo() ? '' : 'none';
+    if (VID) {
+      lbTick();
       // 单页应用里换了视频（或离开视频页）：停掉旧视频的转写，面板换成新视频的
-      const want = ytId() ? 'yt_' + ytId() : '';
+      const want = curSid();
       if (sid && want !== sid && !navBusy) {
         navBusy = true;
         try { if (run) await stopRun('换了视频，上一个视频的转写停了（转好的部分已保存）'); else if (open && want) await refresh(); else { sid = ''; data = null; } }
         finally { navBusy = false; }
       }
     }
+    if (!run) showNeed(false);
     if (!open && !run) return;
     const s = await main('state', {}, 1500);
     if (s) st = s;
+    const locked = trackLock(s);
     // YouTube 换视频后播放器信息晚一两秒才更新：更新了就重画标题和按钮（「取字幕」还是「开始转写」）
-    if (YT && open) { const k = s && s.info ? s.info.id + ':' + s.info.caps : ''; if (k !== infoKey) { infoKey = k; render(); } }
+    if (VID && open) { const k = s && s.info ? s.info.id + ':' + s.info.caps + ':' + (s.info.title || '') : ''; if (k !== infoKey) { infoKey = k; render(); } }
     // YouTube 放久了会弹“视频已暂停，要继续观看吗？”：转写中停住了就点继续
-    if (YT && run && s && s.ready && s.paused && Date.now() - run.lastAudio > 6000 && Date.now() - run.nudged > 8000) { run.nudged = Date.now(); main('play'); }
+    if (VID && run && !locked && s && s.ready && s.paused && Date.now() - run.lastAudio > 6000 && Date.now() - run.nudged > 8000) { run.nudged = Date.now(); main('play'); }
     // 看门狗：转写中 6 秒进度没动、播放器又不是暂停的，多半是卡住了（实测停在 0 秒时再跳到 0 秒不会开始加载）：往后推半秒
-    if (run && s && s.ready && !s.paused && Date.now() - run.lastAudio > 6000 && Date.now() - run.nudged > 8000) {
+    // 被浏览器拦着的时候不推：推了也不会播，进度条却在走，看起来像在转写（实测空转过一小时）
+    if (run && !locked && s && s.ready && !s.paused && Date.now() - run.lastAudio > 6000 && Date.now() - run.nudged > 8000) {
       run.nudged = Date.now();
       main('seek', { ms: s.vt + 500 });
     }

@@ -47,7 +47,8 @@ function appAsk(m, ms = 1500) {
 }
 const PV = /^https:\/\/[^/]+\.polyv\.cn\//; // 保利威直播回放页
 const YTW = /^https:\/\/www\.youtube\.com\/watch\?/; // YouTube 视频页
-const videoTab = url => /^https:\/\/www\.bilibili\.com\//.test(url || '') || PV.test(url || '') || YTW.test(url || '');
+const VMW = /^https:\/\/(player\.)?vimeo\.com\/(video\/)?\d{5,}/; // Vimeo 视频页
+const videoTab = url => /^https:\/\/www\.bilibili\.com\//.test(url || '') || PV.test(url || '') || YTW.test(url || '') || VMW.test(url || '');
 async function onApp(m) {
   if (m.a && appWait.has(m.a)) { const r = appWait.get(m.a); appWait.delete(m.a); return r(m); }
   if (m.type === 'ping') { appSend({ type: 'pong' }); return; } // 软件每 20 秒发一次：有来往，后台就不会休眠断线
@@ -61,7 +62,7 @@ async function onApp(m) {
       else {
         const [tab] = await chrome.tabs.query({ active: true, windowId: w.id });
         if (tab && videoTab(tab.url)) {
-          const r = await chrome.tabs.sendMessage(tab.id, { type: 'app-capture' });
+          const r = await chrome.tabs.sendMessage(tab.id, { type: 'app-capture', shot: m.shot });
           if (r) { out = r; if (r.ok) lastAppTab = tab.id; }
         }
       }
@@ -385,8 +386,64 @@ async function handle(msg) {
   return { ok: false, detail: 'unknown ' + msg.type };
 }
 
+// —— 按页批量（弹窗发起）：网页里嵌着的好几个视频当成一门课，开一个标签页依次打开每个视频的独立页面，
+// 那个页面上的面板（panel.js）认出自己是批量标签页，就自动取字幕或转写、交给软件出大纲，做完告诉这里，这里跳到下一个 ——
+const LB = 'bn-listbatch';
+const lbGet = async () => (await chrome.storage.local.get(LB))[LB] || null;
+const lbSet = b => chrome.storage.local.set({ [LB]: b });
+const lbCur = b => b && b.items.find(x => !x.st);
+async function lbNext(b) {
+  const nxt = lbCur(b);
+  if (!nxt) { b.running = false; b.endedAt = Date.now(); await lbSet(b); return; }
+  await lbSet(b);
+  try {
+    // 下一个视频和现在这页是同一个网站：让页面自己跳过去。这样用户在这个标签页里点过的那一下还算数（浏览器的自动播放规则），
+    // 没字幕、要放一遍转写的视频不用每个都再点；由后台直接换地址的话，每个新页面都得重新点
+    const tab = await chrome.tabs.get(b.tabId);
+    if (lbSite(tab.url) && lbSite(tab.url) === lbSite(nxt.url)) {
+      try { await chrome.scripting.executeScript({ target: { tabId: b.tabId }, func: u => { location.href = u; }, args: [nxt.url] }); return; } catch (e) {}
+    }
+    await chrome.tabs.update(b.tabId, { url: nxt.url });
+  } catch (e) { b.running = false; await lbSet(b); } // 批量标签页被关了
+}
+const lbSite = u => { try { return new URL(u).hostname.split('.').slice(-2).join('.'); } catch (e) { return ''; } };
+async function lbHandle(msg, sender) {
+  switch (msg.type) {
+    case 'open-manager': await openManager(); return { ok: true };
+    case 'app-ok': return { ok: !!appWs };
+    case 'lb-status': return { batch: await lbGet() };
+    case 'lb-start': {
+      const old = await lbGet();
+      if (old && old.running) return { ok: false, detail: '已经有一个批量在跑，先停掉它' };
+      const items = (msg.items || []).filter(x => x && x.url && x.key).map((x, i) => ({ key: String(x.key), url: String(x.url), title: String(x.title || ''), idx: i + 1, st: '', detail: '' }));
+      if (!items.length) return { ok: false, detail: '没有选视频' };
+      const tab = await chrome.tabs.create({ url: items[0].url, active: true });
+      await lbSet({ running: true, tabId: tab.id, group: String(msg.group || '网页视频').slice(0, 100), source: String(msg.source || ''), items, startedAt: Date.now() });
+      return { ok: true };
+    }
+    case 'lb-stop': { const b = await lbGet(); if (b) { b.running = false; await lbSet(b); } return { ok: true }; }
+    case 'lb-focus': { const b = await lbGet(); if (b && b.tabId) { try { const t = await chrome.tabs.update(b.tabId, { active: true }); await chrome.windows.update(t.windowId, { focused: true }); } catch (e) {} } return { ok: true }; }
+    case 'lb-mine': { // 面板问：我（这个标签页）是不是批量标签页？是的话现在该做哪个
+      const b = await lbGet(), cur = lbCur(b);
+      if (!b || !b.running || !sender.tab || sender.tab.id !== b.tabId || !cur) return { job: null };
+      return { job: { group: b.group, item: cur, total: b.items.length, done: b.items.filter(x => x.st).length } };
+    }
+    case 'lb-done': {
+      const b = await lbGet();
+      if (!b || !b.running || !sender.tab || sender.tab.id !== b.tabId) return { ok: false };
+      const it = b.items.find(x => x.key === msg.key && !x.st);
+      if (it) { it.st = msg.st || (msg.ok ? 'ok' : 'fail'); it.detail = String(msg.detail || ''); }
+      await lbNext(b);
+      return { ok: true, finished: !b.running, items: b.items };
+    }
+  }
+  return null;
+}
+chrome.tabs.onRemoved.addListener(async id => { const b = await lbGet(); if (b && b.running && b.tabId === id) { b.running = false; await lbSet(b); } });
+
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === 'changed') return;
+  if (/^(lb-|open-manager$|app-ok$)/.test(msg.type || '')) { lbHandle(msg, sender).then(reply, e => reply({ ok: false, detail: String(e) })); return true; }
   handle(msg).then(reply, e => reply({ ok: false, detail: String(e) }));
   return true;
 });

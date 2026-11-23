@@ -1,26 +1,31 @@
 {
   "manifest_version": 3,
   "name": "FrameScribe 视频笔记",
-  "version": "0.7.0",
-  "description": "看视频时按一下就截图、记时间点、写一句；取字幕或本机转写，生成带时间的大纲，点一下跳回那一秒。B 站 · YouTube · 课程回放。",
+  "version": "0.8.0",
+  "description": "看视频时按一下就截图、记时间点、写一句；取字幕或本机转写，生成带时间的大纲，点一下跳回那一秒。B 站 · YouTube · Vimeo · 课程回放；网页里嵌入的 Vimeo / YouTube 可以按页批量出大纲。",
   "permissions": [
     "storage",
     "unlimitedStorage",
     "alarms",
-    "nativeMessaging"
+    "nativeMessaging",
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "https://*.bilibili.com/*",
     "https://*.hdslb.com/*",
     "https://*.polyv.cn/*",
     "https://www.youtube.com/*",
+    "https://vimeo.com/*",
+    "https://player.vimeo.com/*",
     "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "打开 FrameScribe 笔记本"
+    "default_title": "FrameScribe：本页视频 / 笔记本",
+    "default_popup": "popup.html"
   },
   "commands": {
     "capture": {
@@ -51,7 +56,10 @@
     {
       "matches": [
         "https://*.polyv.cn/*",
-        "https://www.youtube.com/*"
+        "https://www.youtube.com/*",
+        "https://vimeo.com/*",
+        "https://player.vimeo.com/*",
+        "https://www.bilibili.com/*"
       ],
       "js": [
         "page-main.js"
@@ -62,7 +70,10 @@
     {
       "matches": [
         "https://*.polyv.cn/*",
-        "https://www.youtube.com/*"
+        "https://www.youtube.com/*",
+        "https://vimeo.com/*",
+        "https://player.vimeo.com/*",
+        "https://www.bilibili.com/*"
       ],
       "js": [
         "panel.js"

@@ -15,7 +15,7 @@ Bilibili · YouTube · course replays · any local player. Grabs subtitles when 
 | `Alt+L` | "Lecture mode": transcribes whatever your PC is playing, sentence by sentence, on-device |
 | "Export & organize" | Your AI reads screenshots + subtitles + your notes and writes a Markdown note with clickable timestamps |
 
-On YouTube, the 📒 panel grabs subtitles (or transcribes), builds a chapter outline you can click to seek, and can batch a whole playlist into outlines plus an index page.
+On Bilibili, YouTube, Vimeo and course replays, the 📒 panel grabs subtitles (or transcribes), builds a chapter outline you can click to seek; a YouTube playlist, or every Vimeo/YouTube video embedded in a web page, can be batched into outlines plus an index page.
 
 ![outline](docs/media/demo-outline.gif)
 

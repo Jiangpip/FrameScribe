@@ -96,7 +96,7 @@ ${fill(STRUCTURE, raw, today)}`;
   function material(s, marks, body, imgs, link) {
     const L = [], screen = s.kind === 'screen';
     if (screen) L.push(`# 视频信息\n屏幕记录（没有视频链接，时间是电脑时钟）\n窗口标题：${s.title}${s.app ? '\n程序：' + s.app : ''}`);
-    else if (s.kind === 'web' && s.site === 'youtube') L.push(`# 视频信息\n标题：${s.title}${s.part ? '（发布：' + s.part + '）' : ''}\n平台：YouTube${s.owner ? '\n频道：' + s.owner : ''}\n时长：${fmt(s.duration || 0)}\n链接：${s.url}`);
+    else if (s.kind === 'web' && (s.site === 'youtube' || s.site === 'vimeo')) L.push(`# 视频信息\n标题：${s.title}${s.part ? '（发布：' + s.part + '）' : ''}\n平台：${s.site === 'vimeo' ? 'Vimeo' : 'YouTube'}${s.owner ? '\n频道：' + s.owner : ''}\n时长：${fmt(s.duration || 0)}\n链接：${s.url}`);
     else if (s.kind === 'web') L.push(`# 视频信息\n标题：${s.title}${s.part ? '（开播：' + s.part + '）' : ''}\n平台：直播回放\n时长：${fmt(s.duration || 0)}\n链接：${s.url}`);
     else L.push(`# 视频信息\n标题：${s.title}${s.part ? '（分P：' + s.part + '）' : ''}\nUP主：${s.owner}\n时长：${fmt(s.duration || 0)}\n链接：${s.url}`);
     L.push('\n# 记录点（用户按键的时刻）');
@@ -134,16 +134,16 @@ ${fill(STRUCTURE, raw, today)}`;
   }
   // 文字从哪来：本机转写（lan 'asr'）还是视频网站的字幕
   function sourceLine(s) {
-    const what = s.site === 'youtube' ? '一个 YouTube 视频' : '一节课（直播回放）';
+    const what = s.site === 'youtube' ? '一个 YouTube 视频' : s.site === 'vimeo' ? '一个 Vimeo 视频' : s.kind === 'web' ? '一节课（直播回放）' : s.kind === 'screen' ? '一段视频（屏幕记录）' : '一个 B 站视频';
     const x = s.subs || {};
     if (!x.lan || x.lan === 'asr') return `下面是${what}的语音转写，每行开头的 [时:分:秒] 是视频时间。转写是机器听出来的，有同音错字和口头语；`;
     return `下面是${what}的字幕（${x.lanDoc || x.lan}），每行开头的 [时:分:秒] 是视频时间。${/自动/.test(x.lanDoc || '') ? '自动字幕是机器听出来的，可能有识别错误、没有标点；' : ''}字幕可能是外语，目录照样用中文写；`;
   }
-  function outlinePrompt(s, body) {
+  function outlinePrompt(s, body, cats) {
     return `${sourceLine(s)}内容可能是软件操作教程、课程讲座或别的视频，按实际内容写，不要猜测视频类型。
 
 请给这个视频做一份带时间的目录，让用户在长视频里能快速找到某个知识点并跳过去。只输出一个 JSON 对象，不要代码块、不要任何说明文字，格式：
-{"summary":"这节课讲了什么，3–5 句","chapters":[{"t":秒,"title":"章节标题","points":[{"t":秒,"text":"知识点"}]}]}
+{"topic":"知识点名","course":"课程短名","cat":"分类","summary":"这节课讲了什么，3–5 句","chapters":[{"t":秒,"title":"章节标题","points":[{"t":秒,"text":"知识点"}]}]}
 
 要求：
 - t 是整数秒（视频开头算 0），取这段内容开始的那一行的时间；章节和知识点都按时间先后排
@@ -153,6 +153,9 @@ ${fill(STRUCTURE, raw, today)}`;
 - 学生提问、老师答疑也算知识点，前面加“问答：”
 - 转写里没有声音的时间段（老师在默默操作）不用硬编内容
 - 全文中文，软件里的英文名词保持英文
+- topic 是这个视频的笔记名：一看就知道这条笔记属于哪个知识点，中文 4–12 字，像词条（例：玻璃材质、法线贴图、悬崖分层侵蚀、独立游戏低成本宣发）；不要写课程名、作者、集数、“第几课”“教程”“详解”这类词；课程开头 / 结尾那集写“课程介绍”“课程总结”
+- course 是这门课（系列）的中文短名，不超过 16 字，作者名和英文专有名词可以保留（例：Ben Cloward 进阶材质、SideFX 地形基础）；不是系列课就写空字符串
+- cat 是领域分类，${cats && cats.length ? '优先从这些里选一个：' + cats.join('、') + '；都不合适才' : ''}写一个 2–6 字的中文分类
 
 视频标题：${s.title}${s.part ? '（' + s.part + '）' : ''}
 时长：${fmt(s.duration || 0)}
@@ -174,16 +177,18 @@ ${transcriptLines(body)}`;
       points: (Array.isArray(c.points) ? c.points : []).map(p => ({ t: num(p.t), text: String(p.text || '').trim() })).filter(p => p.text).sort((x, y) => x.t - y.t)
     })).sort((x, y) => x.t - y.t);
     if (!chapters.length) throw new Error('模型返回的目录是空的');
-    return { summary: String(j.summary || '').trim(), chapters };
+    const str = v => String(v || '').replace(/\s+/g, ' ').trim();
+    return { topic: str(j.topic).slice(0, 24), course: str(j.course).slice(0, 32), cat: str(j.cat).slice(0, 12), summary: String(j.summary || '').trim(), chapters };
   }
   // 大纲.md：章节和知识点的时间都能点；pic(章节, 序号) 返回这一章配的截图相对路径（没有就空）
   function outlineMd(s, o, link, today, pic) {
     const when = t => { const u = link(s, t); return u ? `[${fmt(t)}](${u})` : fmt(t); };
-    const L = ['---', `来源: ${s.url || ''}`, `时长: "${fmt(s.duration || 0)}"`, `生成于: ${today}`, 'tags: [视频笔记, 大纲]', '---',
-      `# 大纲 · ${s.title}${s.part ? ' · ' + s.part : ''}`, ''];
+    const L = ['---', `来源: ${s.url || ''}`, `时长: "${fmt(s.duration || 0)}"`, `生成于: ${today}`, ...(s.topic ? [`aliases: [${JSON.stringify(s.title)}]`] : []), 'tags: [视频笔记, 大纲]', '---',
+      s.topic ? `# ${s.topic}` : `# 大纲 · ${s.title}${s.part ? ' · ' + s.part : ''}`, ''];
+    if (s.topic) L.push(`> 原标题：${s.url ? `[${s.title.replace(/[\[\]]/g, '\\$&')}](${s.url})` : s.title}${s.part ? ' · ' + s.part : ''}`, '');
     if (o.summary) L.push('> ' + o.summary.replace(/\n+/g, ' '), '');
     const fromSubs = s.subs && s.subs.lan && s.subs.lan !== 'asr';
-    L.push(`> 由${fromSubs ? '视频字幕（' + (s.subs.lanDoc || s.subs.lan) + '）' : '本机转写的文字'}自动生成；时间可点（${s.site === 'youtube' ? '直接跳到那一秒' : '装了 FrameScribe 插件，打开链接会自动跳到那一秒'}）；术语可能有识别错误。`, '');
+    L.push(`> 由${fromSubs ? '视频字幕（' + (s.subs.lanDoc || s.subs.lan) + '）' : '本机转写的文字'}自动生成；时间可点（${s.kind !== 'web' || s.site === 'youtube' || s.site === 'vimeo' ? '直接跳到那一秒' : '装了 FrameScribe 插件，打开链接会自动跳到那一秒'}）；术语可能有识别错误。`, '');
     L.push('## 目录', '');
     o.chapters.forEach((c, i) => L.push(`${i + 1}. ${fmt(c.t)} ${c.title}`));
     L.push('');

@@ -8,8 +8,10 @@
   };
   const isScreen = s => s.kind === 'screen';
   const isWeb = s => s.kind === 'web';
-  const SITE = { polyv: '保利威回放', youtube: 'YouTube' };
+  const SITE = { polyv: '保利威回放', youtube: 'YouTube', vimeo: 'Vimeo' };
   const isYT = s => isWeb(s) && s.site === 'youtube';
+  const isVM = s => isWeb(s) && s.site === 'vimeo';
+  const hasOwnT = s => isYT(s) || isVM(s); // 网站自己支持时间参数：不装插件也能跳
   // 把几句字幕连成一段：中文和中文之间加逗号（前一句自带标点就不加），英文等用空格
   const CJK_END = /[⺀-鿿＀-￯]$/, CJK_START = /^[⺀-鿿＀-￯]/;
   const glue = parts => parts.reduce((a, b) => !a ? b : CJK_END.test(a) && CJK_START.test(b) ? a + (/[。！？，；、：]$/.test(a) ? '' : '，') + b : a + ' ' + b, '');
@@ -18,7 +20,8 @@
   const clock = ms => { const d = new Date(ms); return [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':'); };
   const label = (s, m) => isScreen(s) ? clock(m.wall) : fmt(m.t);              // 界面和文件名里显示的时间
   const stamp = (s, m) => label(s, m).replace(/:/g, '');
-  const safe = s => (s || '').replace(/[\\/:*?"<>|#^\[\]\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || '未命名';
+  // 截到 80 字后再去掉结尾的空格和点：Windows 的文件夹名不能以空格或点结尾（Git、资源管理器都打不开）
+  const safe = s => (s || '').replace(/[\\/:*?"<>|#^\[\]\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).replace(/[\s.]+$/, '') || '未命名';
   // 网页回放：在原地址后面加 bn_t=秒，装了插件时打开会自动跳到那里
   const webLink = (url, t) => {
     if (!url) return '';
@@ -27,13 +30,31 @@
   };
   // YouTube：用它自己的 t=秒s，不装插件也能跳
   const ytLink = (url, t) => url ? url.replace(/([?&])t=\d+s?&?/, '$1').replace(/[?&]$/, '') + (url.includes('?') ? '&' : '?') + 't=' + Math.floor(t) + 's' : '';
+  // Vimeo：地址后面加 #t=秒s，Vimeo 自己会跳（实测）
+  const vmLink = (url, t) => url ? url.replace(/#.*$/, '') + '#t=' + Math.floor(t) + 's' : '';
   const link = (s, t) => isScreen(s) ? ''
     : isYT(s) ? ytLink(s.url, t)
+    : isVM(s) ? vmLink(s.url, t)
     : isWeb(s) ? webLink(s.url, t)
     : s.ep ? `https://www.bilibili.com/bangumi/play/ep${s.ep}?t=${Math.floor(t)}` // 电影 / 番剧 / 纪录片页
     : `https://www.bilibili.com/video/${s.bvid}/?${s.p > 1 ? 'p=' + s.p + '&' : ''}t=${Math.floor(t)}`;
   const mdTime = (s, m) => isScreen(s) ? `${clock(m.wall)}（开始记录后 ${fmt(m.t)}）` : `[${fmt(m.t)}](${link(s, m.t)})`;
   const folderName = s => isWeb(s) ? safe(s.title + (s.part ? ' ' + s.part : '')) : safe(s.title + (s.ep ? (s.part ? ' ' + s.part : '') : s.part ? ` P${s.p} ${s.part}` : (s.p > 1 ? ` P${s.p}` : '')) + (isScreen(s) && s.day ? ' ' + s.day : ''));
+  // 笔记放哪、叫什么：<分类>/<课程>/<序号 知识点>/<知识点>-大纲.md
+  // 课程、作者、集数交给上层文件夹，笔记名只说这一集讲什么（s.topic）；没起知识点名的还用视频标题（旧规则）
+  // lib = 资料库对照表 { courses: { <播放列表名>: { cat: 分类, name: 中文课程名 } } }；不在播放列表里的视频用 s.cat / s.course
+  const pad2 = n => String(n).padStart(2, '0');
+  function place(s, lib) {
+    const c = s.group && lib && lib.courses && lib.courses[s.group];
+    const topic = s.topic ? safe(s.topic) : '';
+    const base = topic || folderName(s), parts = [];
+    if (c) { if (c.cat) parts.push(safe(c.cat)); parts.push(safe(c.name || s.group)); }
+    else if (s.group) parts.push(safe(s.group));
+    else { if (s.cat) parts.push(safe(s.cat)); if (s.course) parts.push(safe(s.course)); }
+    const idx = s.group ? (s.groups && s.groups[s.group]) : s.courseIdx;
+    return { parts, folder: topic && idx != null && idx !== '' ? `${pad2(idx)} ${topic}` : base, base };
+  }
+  const shownTitle = s => s.topic || (s.title + (s.part && !isWeb(s) ? ' · ' + s.part : ''));
   const noteLabel = m => m.voice ? '我的笔记（口述转写）' : '我的笔记';
 
   // 某个时间点前后的字幕：从上一条记录（最多往前 60 秒）到这一刻后 8 秒
@@ -46,7 +67,7 @@
   }
 
   function imageNames(s, marks) {
-    const used = new Set(), pre = isScreen(s) ? 'shot' : isYT(s) ? 'yt' : isWeb(s) ? 'pv' : `${s.bvid}_p${s.p}`;
+    const used = new Set(), pre = isScreen(s) ? 'shot' : isYT(s) ? 'yt' : isVM(s) ? 'vm' : isWeb(s) ? 'pv' : `${s.bvid}_p${s.p}`;
     return marks.map(m => {
       let n = `${pre}_${stamp(s, m)}`, k = 2;
       while (used.has(n)) n = `${pre}_${stamp(s, m)}_${k++}`;
@@ -74,8 +95,8 @@
     } else if (isWeb(s)) {
       L.push(`来源: ${s.url}`);
       L.push(`平台: ${JSON.stringify(siteName(s))}`);
-      if (isYT(s) && s.owner) L.push(`频道: ${JSON.stringify(s.owner)}`);
-      if (s.part) L.push(`${isYT(s) ? '发布' : '开播'}: ${JSON.stringify(s.part)}`);
+      if (hasOwnT(s) && s.owner) L.push(`频道: ${JSON.stringify(s.owner)}`);
+      if (s.part) L.push(`${hasOwnT(s) ? '发布' : '开播'}: ${JSON.stringify(s.part)}`);
       L.push(`时长: "${fmt(s.duration || 0)}"`);
     } else {
       L.push(`来源: ${s.url}`);
@@ -89,11 +110,13 @@
     if (isJot(s)) L.push('类型: 随笔');
     else L.push(`字幕: ${JSON.stringify(subsLabel(s))}`);
     L.push('状态: 原始记录');
+    if (s.topic) L.push(`aliases: [${JSON.stringify(s.title)}]`);
     L.push('---');
-    L.push(`# ${s.title}${s.part ? ' · ' + s.part : ''}`);
+    L.push(`# ${s.topic || s.title}${s.part && !s.topic ? ' · ' + s.part : ''}`);
     L.push('');
+    if (s.topic) { L.push(`> 原标题：${s.title}${s.part ? ' · ' + s.part : ''}`); L.push(''); }
     if (isJot(s)) L.push(`> 随笔 · ${marks.length} 张截图${isScreen(s) ? '' : ` · [打开视频](${s.url})`}`);
-    else if (isWeb(s)) L.push(`> ${siteName(s)} · 时长 ${fmt(s.duration || 0)} · ${marks.length} 个记录点 · [打开视频](${s.url})${isYT(s) ? '' : '（时间链接要装插件才会自动跳转）'}`);
+    else if (isWeb(s)) L.push(`> ${siteName(s)} · 时长 ${fmt(s.duration || 0)} · ${marks.length} 个记录点 · [打开视频](${s.url})${hasOwnT(s) ? '' : '（时间链接要装插件才会自动跳转）'}`);
     else if (isScreen(s)) L.push(`> 屏幕记录${s.app ? '（' + s.app + '）' : ''} · ${marks.length} 个记录点 · 时间是电脑时钟，括号里是开始记录后过了多久`);
     else L.push(`> UP主 ${s.owner || '?'} · 时长 ${fmt(s.duration || 0)} · ${marks.length} 个记录点 · [打开视频](${s.url})`);
     L.push('> 这是看视频时按键记下的原始记录；AI 整理版另存为「…-整理.md」，不会覆盖这份。');
@@ -148,5 +171,5 @@
     }, null, 1);
   }
 
-  globalThis.BN_note = { fmt, safe, link, webLink, ytLink, glue, isWeb, isYT, siteName, label, mdTime, isScreen, isJot, noteLabel, folderName, excerpt, imageNames, subsLabel, rawNote, transcript, rawJson };
+  globalThis.BN_note = { fmt, safe, link, webLink, ytLink, vmLink, glue, isWeb, isYT, isVM, hasOwnT, siteName, label, mdTime, isScreen, isJot, noteLabel, folderName, place, shownTitle, excerpt, imageNames, subsLabel, rawNote, transcript, rawJson };
 })();
